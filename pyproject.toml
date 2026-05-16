@@ -36,6 +36,7 @@ dependencies = [
 convert = [
     "torch>=2.0.0",
     "torchaudio>=2.0.0",
+    "einops>=0.8.0",
 ]
 v2 = [
     "torch>=2.0.0",
@@ -44,6 +45,35 @@ v2 = [
     "safetensors>=0.4.0",
     "omegaconf>=2.3.0",
     "librosa>=0.10.0",
+    "einops>=0.8.0",
+]
+api = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+]
+webui = [
+    "gradio>=5.0.0",
+]
+qwen = [
+    "mlx-lm>=0.24.0",
+]
+emotion2vec = [
+    "torch>=2.0.0",
+    "torchaudio>=2.0.0",
+    "funasr>=1.1.16",
+    "modelscope>=1.17.0",
+]
+library = [
+    "torch>=2.0.0",
+    "torchaudio>=2.0.0",
+    "transformers>=4.40.0",
+    "funasr>=1.1.16",
+    "modelscope>=1.17.0",
+    "yt-dlp>=2024.8.6",
+]
+denoise = [
+    "demucs>=4.0.0",
+    "torchcodec>=0.10,<0.11",
 ]
 dev = [
     "pytest>=7.0.0",
@@ -57,6 +87,8 @@ dev = [
 
 [project.scripts]
 mlx-indextts = "mlx_indextts.cli:main"
+mlx-indextts-api = "mlx_indextts.api_server:main"
+mlx-indextts-webui = "mlx_indextts.webui:main"
 
 [project.urls]
 Homepage = "https://github.com/your-repo/mlx-indextts"

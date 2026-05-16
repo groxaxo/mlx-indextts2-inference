@@ -85,6 +85,28 @@ class TestCrossfadeSegments:
 class TestGenerateComponents:
     """Tests for generation component functions."""
 
+    def test_duration_token_estimator(self):
+        from mlx_indextts.runtime import estimate_mel_tokens_for_duration
+
+        assert estimate_mel_tokens_for_duration(2.0, version="2.0") == 100
+        assert estimate_mel_tokens_for_duration(2.0, version="1.5") == 90
+        assert estimate_mel_tokens_for_duration(0.0, version="2.0") == 5
+
+    def test_text_token_estimator_caps_short_batch_rows(self):
+        from mlx_indextts.runtime import estimate_mel_tokens_for_text
+
+        assert estimate_mel_tokens_for_text("你好。", hard_max=900) == 320
+        assert estimate_mel_tokens_for_text("这是一个很长的批量生成句子", hard_max=260, tokens_per_char=20) == 260
+
+    def test_m3max_memory_profile_scales_cache_for_large_unified_memory(self):
+        from mlx_indextts.performance import resolve_mlx_memory_limits
+
+        limits = resolve_mlx_memory_limits(total_memory_bytes=128 * 1024**3)
+
+        assert limits.memory_limit_gb == 96.0
+        assert limits.cache_limit_gb == 32.0
+        assert limits.source == "auto"
+
     def test_prepare_inputs_shape(self):
         """Test that input preparation produces correct shapes."""
         from mlx_indextts.config import IndexTTSConfig
@@ -140,6 +162,39 @@ class TestGenerateComponents:
         # Not all should be 50 with high temperature
         unique_samples = set(samples_high_temp)
         assert len(unique_samples) >= 1  # At least some variance
+
+    def test_repetition_penalty_updates_selected_tokens(self):
+        """Test repetition penalty updates only generated token logits."""
+        from mlx_indextts.models.gpt import UnifiedVoice
+        from mlx_indextts.config import IndexTTSConfig
+
+        config = IndexTTSConfig()
+        config.gpt.model_dim = 256
+        config.gpt.heads = 4
+        config.gpt.layers = 2
+        model = UnifiedVoice(config)
+
+        logits = mx.array([[2.0, -2.0, 1.0, 0.5]], dtype=mx.float32)
+        penalized = model._apply_repetition_penalty(logits, [0, 1, 1, 99], 2.0)
+
+        assert np.allclose(np.array(penalized), [[1.0, -4.0, 1.0, 0.5]])
+
+    def test_top_p_sampling_runs_without_numpy_scatter(self):
+        """Test top-p sampling stays functional after vectorized masking."""
+        from mlx_indextts.models.gpt import UnifiedVoice
+        from mlx_indextts.config import IndexTTSConfig
+
+        config = IndexTTSConfig()
+        config.gpt.model_dim = 256
+        config.gpt.heads = 4
+        config.gpt.layers = 2
+        model = UnifiedVoice(config)
+
+        logits = mx.array([[5.0, 4.0, 1.0, 0.0]], dtype=mx.float32)
+        mx.random.seed(7)
+        sample = model._sample(logits, temperature=1.0, top_k=0, top_p=0.7)
+
+        assert int(sample[0].item()) in {0, 1}
 
 
 class TestMelExtraction:

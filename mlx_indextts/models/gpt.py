@@ -253,31 +253,19 @@ class UnifiedVoice(nn.Module):
         if penalty == 1.0 or not generated_tokens:
             return logits
 
-        # Get unique tokens
-        unique_tokens = list(set(generated_tokens))
+        vocab_size = logits.shape[-1]
+        unique_tokens = sorted({token for token in generated_tokens if 0 <= token < vocab_size})
+        if not unique_tokens:
+            return logits
 
-        # Create penalty mask
-        # For positive logits: divide by penalty
-        # For negative logits: multiply by penalty
-        for token_id in unique_tokens:
-            if 0 <= token_id < logits.shape[-1]:
-                token_logit = logits[:, token_id]
-                # Apply penalty: positive logits get divided, negative get multiplied
-                new_logit = mx.where(
-                    token_logit > 0,
-                    token_logit / penalty,
-                    token_logit * penalty
-                )
-                # Update the logits array
-                # MLX doesn't support direct item assignment, so we need to use a different approach
-                mask = mx.zeros_like(logits)
-                # Create one-hot mask for this token
-                one_hot = mx.zeros((1, logits.shape[-1]))
-                one_hot = one_hot.at[:, token_id].add(1.0)
-                # Apply: logits = logits * (1 - one_hot) + new_logit * one_hot
-                logits = logits * (1 - one_hot) + new_logit * one_hot
-
-        return logits
+        token_ids = mx.array([unique_tokens], dtype=mx.int32)
+        token_logits = mx.take_along_axis(logits, token_ids, axis=-1)
+        penalized = mx.where(
+            token_logits > 0,
+            token_logits / penalty,
+            token_logits * penalty,
+        )
+        return mx.put_along_axis(logits, token_ids, penalized, axis=-1)
 
     def _sample(
         self,
@@ -337,19 +325,13 @@ class UnifiedVoice(nn.Module):
                 sorted_indices_to_remove[:, :-1]
             ], axis=-1)
 
-            # Create mask using scatter - use numpy for this
-            import numpy as np
-            batch_size, vocab_size = logits.shape
-            indices_to_remove_np = np.zeros((batch_size, vocab_size), dtype=bool)
-            sorted_indices_np = np.array(sorted_indices)
-            sorted_remove_np = np.array(sorted_indices_to_remove)
-
-            for b in range(batch_size):
-                for i in range(vocab_size):
-                    if sorted_remove_np[b, i]:
-                        indices_to_remove_np[b, sorted_indices_np[b, i]] = True
-
-            indices_to_remove = mx.array(indices_to_remove_np)
+            indices_to_remove = mx.zeros_like(sorted_indices_to_remove)
+            indices_to_remove = mx.put_along_axis(
+                indices_to_remove,
+                sorted_indices,
+                sorted_indices_to_remove,
+                axis=-1,
+            )
             logits = mx.where(indices_to_remove, float("-inf"), logits)
 
         # Sample

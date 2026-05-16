@@ -147,10 +147,8 @@ class UpSample1d(nn.Module):
         """
         batch, channels, length = x.shape
 
-        # Replicate padding using numpy (MLX doesn't support edge padding)
-        x_np = np.array(x)
-        x_padded = np.pad(x_np, ((0, 0), (0, 0), (self.pad, self.pad)), mode='edge')
-        x_padded = mx.array(x_padded)
+        # Keep padding on MLX to avoid CPU round-trips in the vocoder path.
+        x_padded = mx.pad(x, ((0, 0), (0, 0), (self.pad, self.pad)), mode="edge")
 
         # NCL -> NLC for conv_transpose1d
         x_nlc = x_padded.transpose(0, 2, 1)  # (batch, padded_length, channels)
@@ -214,10 +212,8 @@ class DownSample1d(nn.Module):
         """
         batch, channels, length = x.shape
 
-        # Replicate padding using numpy (MLX doesn't support edge padding)
-        x_np = np.array(x)
-        x_padded = np.pad(x_np, ((0, 0), (0, 0), (self.pad_left, self.pad_right)), mode='edge')
-        x_padded = mx.array(x_padded)
+        # Keep padding on MLX to avoid CPU round-trips in the vocoder path.
+        x_padded = mx.pad(x, ((0, 0), (0, 0), (self.pad_left, self.pad_right)), mode="edge")
 
         # NCL -> NLC for conv1d
         x_nlc = x_padded.transpose(0, 2, 1)  # (batch, padded_length, channels)

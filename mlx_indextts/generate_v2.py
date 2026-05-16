@@ -30,6 +30,7 @@ import mlx.nn as nn
 from omegaconf import OmegaConf
 
 from mlx_indextts.generate import compress_silence, crossfade_segments, time_stretch_wsola
+from mlx_indextts.performance import configure_mlx_runtime, configure_torch_threads
 
 
 # 8 emotion categories in IndexTTS 2.0
@@ -108,7 +109,7 @@ class IndexTTSv2:
         config_path: Optional[str] = None,
         device: str = "mps",
         mlx_model_dir: Optional[str] = None,
-        memory_limit_gb: float = 0,
+        memory_limit_gb: float | None = None,
         quantize_bits: Optional[int] = None,
     ):
         """Initialize IndexTTS 2.0.
@@ -118,12 +119,16 @@ class IndexTTSv2:
             config_path: Path to config.yaml (optional, defaults to model_dir/config.yaml)
             device: PyTorch device for preprocessing (mps, cuda, cpu)
             mlx_model_dir: Alias for model_dir (for backwards compatibility)
-            memory_limit_gb: GPU memory limit in GB (0 = no limit)
+            memory_limit_gb: GPU memory limit in GB (None = auto, 0 = no limit)
             quantize_bits: Runtime quantization bits for GPT (4 or 8), None for no quantization
         """
-        # Set memory limit if specified
-        if memory_limit_gb > 0:
-            mx.set_memory_limit(int(memory_limit_gb * 1024 * 1024 * 1024))
+        # Configure MLX memory/cache before loading model. Auto mode scales up
+        # on large Apple unified-memory hosts while respecting explicit limits.
+        if memory_limit_gb is None:
+            configure_mlx_runtime()
+        elif memory_limit_gb > 0:
+            configure_mlx_runtime(memory_limit_gb=memory_limit_gb)
+        configure_torch_threads()
 
         self.model_dir = Path(model_dir)
         self.device = device
@@ -184,8 +189,10 @@ class IndexTTSv2:
         # Mel spectrogram config for reference audio
         self._init_mel_config()
 
-        # Cache
+        # Reference conditioning cache. Keep separate entries so a speaker ref
+        # and an emotion ref can coexist without forcing repeated W2V-BERT work.
         self.cache = {}
+        self._reference_cache = {}
 
         print("IndexTTS 2.0 ready!")
 
@@ -252,48 +259,6 @@ class IndexTTSv2:
             print(f"Warning: Failed to load semantic_codec weights: {e}")
         self.semantic_codec = self.semantic_codec.to(self.device)
         self.semantic_codec.eval()
-
-    def _init_pytorch_modules(self):
-        """Initialize PyTorch modules for .wav preprocessing.
-
-        Loads W2V-BERT, CAMPPlus, and emotion matrices.
-        Called lazily when processing .wav files (not needed for .npz).
-        """
-        from mlx_indextts.indextts.utils.maskgct_utils import build_semantic_model
-        from mlx_indextts.indextts.s2mel.modules.campplus.DTDNN import CAMPPlus as CAMPPlusModel
-        from transformers import AutoFeatureExtractor
-
-        # Find w2v stats file
-        w2v_stat_path = self.mlx_model_dir / self.cfg.w2v_stat
-        if not w2v_stat_path.exists():
-            w2v_stat_path = self.model_dir / self.cfg.w2v_stat
-        if not w2v_stat_path.exists():
-            raise FileNotFoundError(f"W2V stats file not found: {self.cfg.w2v_stat}")
-
-        # W2V-BERT (Semantic Model)
-        print("Loading W2V-BERT...")
-        self.semantic_model, self.semantic_mean, self.semantic_std = build_semantic_model(
-            path_=str(w2v_stat_path)
-        )
-        self.semantic_model = self.semantic_model.to(self.device)
-        self.semantic_mean = self.semantic_mean.to(self.device)
-        self.semantic_std = self.semantic_std.to(self.device)
-        self.extract_features = AutoFeatureExtractor.from_pretrained("facebook/w2v-bert-2.0")
-
-        # CAMPPlus
-        print("Loading CAMPPlus...")
-        try:
-            from huggingface_hub import hf_hub_download
-            campplus_path = hf_hub_download("funasr/campplus", filename="campplus_cn_common.bin")
-            self.campplus = CAMPPlusModel(feat_dim=80, embedding_size=192)
-            state_dict = torch.load(campplus_path, map_location=self.device)
-            self.campplus.load_state_dict(state_dict)
-            print(f"  CAMPPlus weights restored from: {campplus_path}")
-        except Exception as e:
-            print(f"Warning: Failed to load CAMPPlus weights: {e}")
-            self.campplus = CAMPPlusModel(feat_dim=80, embedding_size=192)
-        self.campplus = self.campplus.to(self.device)
-        self.campplus.eval()
 
     def _load_emotion_matrices(self):
         """Load emotion matrices for emotion control (small .pt files)."""
@@ -425,6 +390,21 @@ class IndexTTSv2:
             print(f"BigVGAN v2 (MLX) loaded from {self.bigvgan_weights_path}")
         else:
             print(f"Warning: BigVGAN weights not found at {self.bigvgan_weights_path}")
+
+        self._compile_hotpaths()
+
+    def _compile_hotpaths(self) -> None:
+        """Compile S2Mel / BigVGAN hotpaths when MLX supports it.
+
+        This is intentionally best-effort: if compile fails on a given MLX
+        version or shape bucket, the runtime keeps the eager path.
+        """
+        try:
+            self.s2mel_mlx.gpt_layer = mx.compile(self.s2mel_mlx.gpt_layer)
+            self.bigvgan_mlx = mx.compile(self.bigvgan_mlx)
+            print("Compiled S2Mel/BigVGAN hotpaths")
+        except Exception as exc:
+            print(f"Warning: S2Mel/BigVGAN hotpath compile skipped: {exc}")
 
     def _init_tokenizer(self):
         """Initialize text tokenizer."""
@@ -616,13 +596,17 @@ class IndexTTSv2:
         .npz files (pre-computed, no PyTorch needed).
         """
         # Check cache
-        if self.cache.get('audio_path') == audio_path:
-            return self.cache
+        cached = self._reference_cache.get(audio_path)
+        if cached is not None:
+            self.cache = cached
+            return cached
 
         # Load from .npz if pre-computed
         if audio_path.endswith('.npz'):
-            self.cache = self._load_speaker(audio_path)
-            return self.cache
+            cache = self._load_speaker(audio_path)
+            self._reference_cache[audio_path] = cache
+            self.cache = cache
+            return cache
 
         # Otherwise, need PyTorch modules for preprocessing
         self._ensure_pytorch_modules()
@@ -665,7 +649,7 @@ class IndexTTSv2:
         prompt_condition = torch.from_numpy(np.array(prompt_condition_mx)).to(self.device)
 
         # Cache
-        self.cache = {
+        cache = {
             'audio_path': audio_path,
             'spk_cond_emb': spk_cond_emb,
             'S_ref': S_ref,
@@ -673,7 +657,9 @@ class IndexTTSv2:
             'style': style,
             'prompt_condition': prompt_condition,
         }
-        return self.cache
+        self._reference_cache[audio_path] = cache
+        self.cache = cache
+        return cache
 
     def _compute_emotion_vector(
         self,
@@ -731,6 +717,7 @@ class IndexTTSv2:
         text: str,
         reference_audio: str,
         output_path: Optional[str] = None,
+        emotion_reference_audio: Optional[str] = None,
         max_mel_tokens: int = 1500,
         max_text_tokens_per_segment: int = 120,
         interval_silence: int = 200,
@@ -751,7 +738,8 @@ class IndexTTSv2:
 
         Args:
             text: Input text to synthesize
-            reference_audio: Path to reference audio file
+            reference_audio: Path to speaker reference audio or .npz file
+            emotion_reference_audio: Optional separate emotion reference audio or .npz file
             output_path: Optional path to save output audio
             max_mel_tokens: Maximum mel tokens to generate per segment
             max_text_tokens_per_segment: Maximum text tokens per segment (for long text splitting)
@@ -784,17 +772,27 @@ class IndexTTSv2:
         start_time = time.perf_counter()
         sample_rate = 22050
 
-        # 1. Process reference audio (PyTorch preprocessing)
+        # 1. Process speaker reference audio (PyTorch preprocessing)
         ref_data = self._process_reference_audio(reference_audio)
         spk_cond_emb_pt = ref_data['spk_cond_emb']  # PyTorch tensor
         style_pt = ref_data['style']
         prompt_condition_pt = ref_data['prompt_condition']
         ref_mel_pt = ref_data['ref_mel']
 
+        # Optional separate emotion reference. If omitted, match the official
+        # behavior by using the speaker reference as the emotion reference.
+        if emotion_reference_audio:
+            emo_ref_data = self._process_reference_audio(emotion_reference_audio)
+        else:
+            emo_ref_data = ref_data
+        emo_cond_emb_pt = emo_ref_data['spk_cond_emb']
+
         # Convert to MLX for GPT
         spk_cond_emb = mx.array(spk_cond_emb_pt.cpu().numpy())  # (1, T, 1024)
         # GPT expects NCL format: (batch, 1024, time)
         spk_cond_emb_ncl = spk_cond_emb.transpose(0, 2, 1)
+        emo_cond_emb = mx.array(emo_cond_emb_pt.cpu().numpy())
+        emo_cond_emb_ncl = emo_cond_emb.transpose(0, 2, 1)
 
         # 2. Tokenize text and split into segments
         text_tokens_list = self.tokenizer.tokenize(text)
@@ -816,8 +814,16 @@ class IndexTTSv2:
         speech_cond = self.gpt.get_conditioning(spk_cond_emb_ncl, cond_lengths)
 
         # Emotion conditioning
-        # Base emotion vector from reference audio
-        base_emo_vec = self.gpt.get_emovec(spk_cond_emb_ncl, cond_lengths)
+        # Base emotion vector from speaker + emotion references.
+        emo_cond_lengths = mx.array([emo_cond_emb.shape[1]])
+        ref_emo_alpha = max(0.0, min(1.0, emo_alpha)) if emotion_reference_audio else 1.0
+        base_emo_vec = self.gpt.merge_emovec(
+            spk_cond_emb_ncl,
+            emo_cond_emb_ncl,
+            cond_lengths,
+            emo_cond_lengths,
+            alpha=ref_emo_alpha,
+        )
 
         if emotion is not None:
             # Parse emotion specification
@@ -1061,5 +1067,3 @@ class IndexTTSv2:
             sf.write(output_path, audio, sample_rate)
 
         return audio
-
-

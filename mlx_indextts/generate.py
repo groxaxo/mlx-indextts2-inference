@@ -15,6 +15,7 @@ from mlx_indextts.tokenizer import TextTokenizer
 from mlx_indextts.normalize import TextNormalizer
 from mlx_indextts.models.gpt import UnifiedVoice
 from mlx_indextts.models.bigvgan import BigVGAN
+from mlx_indextts.performance import configure_mlx_runtime
 
 
 def compress_silence(
@@ -273,14 +274,14 @@ class IndexTTS:
     def load_model(
         cls,
         model_dir: Union[str, Path],
-        memory_limit_gb: float = 8.0,
+        memory_limit_gb: float | None = None,
         quantize_bits: Optional[int] = None,
     ) -> "IndexTTS":
         """Load model from directory.
 
         Args:
             model_dir: Directory containing converted MLX model
-            memory_limit_gb: GPU memory limit in GB (default: 8.0, 0 for no limit)
+            memory_limit_gb: GPU memory limit in GB (None = auto, 0 for no limit)
             quantize_bits: Runtime quantization bits (4 or 8), None for no quantization
 
         Returns:
@@ -288,9 +289,12 @@ class IndexTTS:
         """
         import mlx.nn as nn
 
-        # Set memory limit before loading model
-        if memory_limit_gb > 0:
-            mx.set_memory_limit(int(memory_limit_gb * 1024 * 1024 * 1024))
+        # Configure MLX memory/cache before loading model. Auto mode scales up
+        # on large Apple unified-memory hosts while respecting explicit limits.
+        if memory_limit_gb is None:
+            configure_mlx_runtime()
+        elif memory_limit_gb > 0:
+            configure_mlx_runtime(memory_limit_gb=memory_limit_gb)
 
         from mlx_indextts.convert import load_mlx_model
 

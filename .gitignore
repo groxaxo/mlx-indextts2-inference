@@ -46,6 +46,7 @@ ref_audios/
 /tmp/
 
 # Benchmark outputs
+outputs/
 test_outputs/
 benchmark_outputs/
 test_benchmark/
