@@ -5,10 +5,23 @@ Simplified version containing only the functions needed for inference:
 - build_semantic_codec: Build RepCodec model
 """
 
+import os
+
 import torch
 from transformers import Wav2Vec2BertModel
 
 from mlx_indextts.indextts.utils.maskgct.models.codec.kmeans.repcodec_model import RepCodec
+
+
+W2V_BERT_MODEL_ID = "facebook/w2v-bert-2.0"
+
+
+def get_w2v_bert_source():
+    """Return the W2V-BERT source, allowing offline/local overrides."""
+    local_dir = os.environ.get("INDEXTTS_W2V_BERT_DIR")
+    if local_dir:
+        return local_dir
+    return W2V_BERT_MODEL_ID
 
 
 def build_semantic_model(path_='./models/tts/maskgct/ckpt/wav2vec2bert_stats.pt'):
@@ -20,7 +33,7 @@ def build_semantic_model(path_='./models/tts/maskgct/ckpt/wav2vec2bert_stats.pt'
     Returns:
         Tuple of (semantic_model, semantic_mean, semantic_std)
     """
-    semantic_model = Wav2Vec2BertModel.from_pretrained("facebook/w2v-bert-2.0")
+    semantic_model = Wav2Vec2BertModel.from_pretrained(get_w2v_bert_source())
     semantic_model.eval()
     stat_mean_var = torch.load(path_, weights_only=True)
     semantic_mean = stat_mean_var["mean"]

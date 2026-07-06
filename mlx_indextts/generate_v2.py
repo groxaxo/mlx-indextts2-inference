@@ -293,7 +293,7 @@ class IndexTTSv2:
         Loads W2V-BERT and CAMPPlus.
         Called lazily when processing .wav files (not needed for .npz).
         """
-        from mlx_indextts.indextts.utils.maskgct_utils import build_semantic_model
+        from mlx_indextts.indextts.utils.maskgct_utils import build_semantic_model, get_w2v_bert_source
         from mlx_indextts.indextts.s2mel.modules.campplus.DTDNN import CAMPPlus as CAMPPlusModel
         from transformers import AutoFeatureExtractor
 
@@ -312,7 +312,7 @@ class IndexTTSv2:
         self.semantic_model = self.semantic_model.to(self.device)
         self.semantic_mean = self.semantic_mean.to(self.device)
         self.semantic_std = self.semantic_std.to(self.device)
-        self.extract_features = AutoFeatureExtractor.from_pretrained("facebook/w2v-bert-2.0")
+        self.extract_features = AutoFeatureExtractor.from_pretrained(get_w2v_bert_source())
 
         # CAMPPlus
         print("Loading CAMPPlus...")
