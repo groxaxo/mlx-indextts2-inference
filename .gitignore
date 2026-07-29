@@ -38,6 +38,7 @@ Thumbs.db
 # Project specific
 /models/
 ref_audios/
+*.log
 *.safetensors
 *.pth
 *.pt
