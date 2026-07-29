@@ -1015,11 +1015,12 @@ def build_scene_emotion_library(
             "clip_path": str(clip_path.relative_to(output_root)),
             "age_gender_source": gender_age.get("age_gender_source", "model" if gender_classifier else "heuristic"),
         }
-        row["library_score"] = f"{(
+        library_score = (
             clamp_score(row["emotion_confidence"]) * 0.72
             + clamp_score(row["gender_confidence"]) * 0.18
             + (0.15 if 1.5 <= segment.duration_s <= 8.0 else 0.05 if segment.duration_s >= 0.8 else -0.05)
-        ):.4f}"
+        )
+        row["library_score"] = f"{library_score:.4f}"
         row["composite_key"] = (
             f"{scene}|{row['emotion_label']}|{row['gender_label']}|{row['age_band']}"
         )
