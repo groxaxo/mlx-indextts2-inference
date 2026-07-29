@@ -50,6 +50,7 @@ class GenerateOptions:
     speed: float = 1.0
     target_duration: float | None = None
     fit_duration: bool = False
+    max_fit_stretch_ratio: float = 2.0
     verbose: bool = False
     dynamic_max_tokens: bool = False
     tokens_per_char: float = 14.0
@@ -134,6 +135,16 @@ def estimate_mel_tokens_for_duration(duration_s: float, *, version: str) -> int:
     """
     tokens_per_second = 50.0 if version == "2.0" else 45.0
     return max(1, int(math.ceil(max(0.1, duration_s) * tokens_per_second)))
+
+
+def duration_fit_allowed(
+    source_duration: float, target_duration: float, max_ratio: float = 2.0
+) -> bool:
+    """Reject post-hoc stretching large enough to destroy speech quality."""
+    if source_duration <= 0 or target_duration <= 0 or max_ratio < 1.0:
+        return False
+    ratio = source_duration / target_duration
+    return (1.0 / max_ratio) <= ratio <= max_ratio
 
 
 def estimate_mel_tokens_for_text(
@@ -345,14 +356,26 @@ class TTSRuntime:
             )
             tts.save_audio(audio, output_path)
 
+        fit_duration_applied = False
+        fit_duration_skip_reason = ""
         if options.fit_duration and options.target_duration and audio is not None:
             duration_before = len(audio) / 22050.0
-            if duration_before > 0:
+            if duration_fit_allowed(
+                duration_before,
+                options.target_duration,
+                options.max_fit_stretch_ratio,
+            ):
                 from mlx_indextts.generate import time_stretch_wsola
 
                 fit_rate = duration_before / options.target_duration
                 audio = time_stretch_wsola(audio, rate=fit_rate, sample_rate=22050)
                 sf.write(output_path, audio, 22050)
+                fit_duration_applied = True
+            else:
+                fit_duration_skip_reason = (
+                    "requested duration requires destructive stretch beyond "
+                    f"{options.max_fit_stretch_ratio:.2f}x"
+                )
 
         elapsed = time.perf_counter() - start
         duration = len(audio) / 22050.0 if isinstance(audio, np.ndarray) else sf.info(output_path).duration
@@ -365,6 +388,8 @@ class TTSRuntime:
             "rtf": round(elapsed / duration, 4) if duration > 0 else None,
             "target_duration_s": options.target_duration or "",
             "fit_duration": options.fit_duration,
+            "fit_duration_applied": fit_duration_applied,
+            "fit_duration_skip_reason": fit_duration_skip_reason,
             **emotion_meta,
         }
 

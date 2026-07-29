@@ -2,6 +2,7 @@
 
 import argparse
 import csv
+import json
 import os
 import re
 import sys
@@ -244,6 +245,7 @@ def generate_command(args):
         speed=getattr(args, 'speed', 1.0),
         target_duration=getattr(args, 'target_duration', None),
         fit_duration=getattr(args, 'fit_duration', False),
+        max_fit_stretch_ratio=getattr(args, 'max_fit_stretch_ratio', 2.0),
     )
     runtime = TTSRuntime(memory_limit_gb=memory_limit, quantize=args.quantize)
     result = runtime.generate(
@@ -257,7 +259,7 @@ def generate_command(args):
     if result.get("emotion_source") == "qwen-mlx":
         print(f"Qwen emotion: {result.get('dominant_emotion')} {result.get('emotion_json')}")
 
-    print(f"Audio saved to {args.output}")
+    print(json.dumps(result, ensure_ascii=False))
 
     # Play audio if requested
     if args.play:
@@ -788,6 +790,12 @@ def main():
         "--fit-duration",
         action="store_true",
         help="After generation, time-stretch without pitch shift to match --target-duration. Disabled unless explicitly requested.",
+    )
+    generate_parser.add_argument(
+        "--max-fit-stretch-ratio",
+        type=float,
+        default=2.0,
+        help="Refuse destructive duration fitting beyond this speed ratio (default: 2.0).",
     )
     generate_parser.set_defaults(func=generate_command)
 
