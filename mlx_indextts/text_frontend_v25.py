@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Callable, Protocol
 
 from mlx_indextts.tokenizer_v25 import language_id, normalize_v25_language
 
@@ -162,16 +162,25 @@ def prepare_v25_tokens(
     language: str = "auto",
     max_text_tokens_per_segment: int = 120,
     text_position_capacity: int = 602,
+    text_normalization: bool = True,
+    normalizer: Callable[[str, str, bool], str] | None = None,
+    japanese_processor: Callable[[str], str] | None = None,
 ) -> PreparedV25Text:
-    """Prepare already-normalized text for language-aware GPT inference."""
+    """Prepare text for language-aware GPT inference in upstream operation order."""
 
     resolution = resolve_v25_language(text, language)
-    prepared = text
+    prepared = (
+        normalizer(text, resolution.language, text_normalization)
+        if normalizer is not None
+        else text
+    )
     if resolution.language in {"zh", "en", "ja"}:
         prepared = prepared.lower()
     elif resolution.language == "es":
         prepared = prepared.upper()
     prepared = apply_pronunciation_annotations(prepared)
+    if resolution.language == "ja" and japanese_processor is not None:
+        prepared = japanese_processor(prepared)
     prepared = _SPECIAL_TOKEN_PATTERN.sub(
         lambda match: f"<|{match.group(1).upper()}|>",
         prepared,

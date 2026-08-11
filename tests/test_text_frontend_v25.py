@@ -104,3 +104,24 @@ def test_prepare_spanish_uses_upstream_uppercase_rule(tmp_path: Path):
 
     assert prepared.normalized_text == "¡HOLA, SEÑOR!"
     assert prepared.token_ids[0][-1] == 1
+
+
+def test_prepare_calls_normalizer_before_case_and_annotations():
+    tokenizer = _CharacterTokenizer()
+    calls = []
+
+    def normalizer(text: str, language: str, enabled: bool) -> str:
+        calls.append((text, language, enabled))
+        return "<行|xing2>"
+
+    prepared = prepare_v25_tokens(
+        "ignored",
+        tokenizer=tokenizer,
+        language="zh",
+        normalizer=normalizer,
+    )
+
+    assert calls == [("ignored", "zh", True)]
+    assert prepared.normalized_text == (
+        "<|SPECIAL_TOKEN_2|>XING2<|SPECIAL_TOKEN_2|>"
+    )
