@@ -7,7 +7,7 @@ adds a learned language embedding to every text position during generation.
 
 from __future__ import annotations
 
-from typing import Tuple
+from typing import List, Optional, Tuple
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -163,6 +163,68 @@ class UnifiedVoiceV25(UnifiedVoiceV2):
             attention_masks.append(mask)
 
         return mx.stack(batch_embeddings, axis=0), mx.stack(attention_masks, axis=0)
+
+    @staticmethod
+    def generation_attention_mask(
+        padding_mask: mx.array,
+        *,
+        query_len: int,
+        key_len: int,
+    ) -> mx.array:
+        """Combine the official left-padding mask with autoregressive causality."""
+        if padding_mask.ndim != 2 or padding_mask.shape[1] != key_len:
+            raise ValueError("padding mask length must match the GPT key length")
+        if query_len > key_len:
+            raise ValueError("query length cannot exceed key length")
+        masked_value = mx.array(-1e9, dtype=mx.float32)
+        if query_len == key_len:
+            causal = mx.triu(mx.ones((query_len, key_len)), k=1)
+        else:
+            cache_len = key_len - query_len
+            query_positions = mx.arange(query_len)[:, None] + cache_len
+            key_positions = mx.arange(key_len)[None, :]
+            causal = key_positions > query_positions
+        causal = mx.where(causal, masked_value, 0.0)[None, None, :, :]
+        padding = mx.where(
+            padding_mask[:, None, None, :] > 0,
+            0.0,
+            masked_value,
+        )
+        return causal + padding
+
+    def generate_step(
+        self,
+        input_emb: mx.array,
+        cache: Optional[List[Tuple[mx.array, mx.array]]] = None,
+        temperature: float = 1.0,
+        top_k: int = 30,
+        top_p: float = 0.8,
+        repetition_penalty: float = 1.0,
+        generated_tokens: Optional[List[int]] = None,
+        attention_mask: Optional[mx.array] = None,
+    ) -> Tuple[mx.array, mx.array, List[Tuple[mx.array, mx.array]]]:
+        """Generate one semantic token while preserving 2.5 left-padding."""
+        mask = None
+        if attention_mask is not None:
+            cache_len = 0 if cache is None else cache[0][0].shape[1]
+            key_len = cache_len + input_emb.shape[1]
+            mask = self.generation_attention_mask(
+                attention_mask,
+                query_len=input_emb.shape[1],
+                key_len=key_len,
+            )
+        hidden, new_cache = self.gpt(input_emb, mask=mask, cache=cache)
+        hidden = self.final_norm(hidden[:, -1:, :])
+        logits = self.mel_head(hidden)
+        next_token = self._sample(
+            logits[:, 0, :],
+            temperature,
+            top_k,
+            top_p,
+            repetition_penalty,
+            generated_tokens,
+        )
+        return next_token, logits, new_cache
 
 
 # Naming parity with the official source.

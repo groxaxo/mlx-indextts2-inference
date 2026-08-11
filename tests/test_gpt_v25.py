@@ -102,3 +102,37 @@ def test_v25_prepare_inputs_requires_one_language_per_batch_row():
 
     with pytest.raises(ValueError, match="language ID"):
         model.prepare_inputs(conditioning, text_tokens, language_ids=mx.array([1]))
+
+
+def test_v25_generation_mask_combines_left_padding_and_causality():
+    from mlx_indextts.models.gpt_v25 import UnifiedVoiceV25
+
+    model = UnifiedVoiceV25(_tiny_config())
+    padding = mx.array([[0, 1, 1, 1]], dtype=mx.int32)
+
+    mask = model.generation_attention_mask(
+        padding,
+        query_len=4,
+        key_len=4,
+    )
+    mx.eval(mask)
+    values = np.asarray(mask)[0, 0]
+
+    assert np.isfinite(values).all()
+    assert np.all(values[:, 0] < -1e8)
+    assert values[1, 2] < -1e8
+    assert values[3, 3] == 0.0
+
+
+def test_v25_incremental_generation_mask_accepts_all_non_padding_history():
+    from mlx_indextts.models.gpt_v25 import UnifiedVoiceV25
+
+    model = UnifiedVoiceV25(_tiny_config())
+    padding = mx.array([[0, 1, 1, 1, 1]], dtype=mx.int32)
+
+    mask = model.generation_attention_mask(padding, query_len=1, key_len=5)
+    mx.eval(mask)
+
+    assert np.asarray(mask).shape == (1, 1, 1, 5)
+    assert np.asarray(mask)[0, 0, 0, 0] < -1e8
+    np.testing.assert_array_equal(np.asarray(mask)[0, 0, 0, 1:], 0.0)
