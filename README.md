@@ -1,34 +1,41 @@
-# MLX-IndexTTS2
+# MLX-IndexTTS
 
-IndexTTS for Apple Silicon using MLX. Zero-shot text-to-speech with voice cloning capabilities.
+Native Apple Silicon MLX inference for IndexTTS 2.0 and IndexTTS 2.5, with
+zero-shot voice cloning, disentangled emotion control, multilingual generation,
+batch/API/WebUI entrypoints, and persistent quantized conversion.
 
 ## Features
 
-- Run IndexTTS 1.5/2.0 natively on Apple Silicon
-- RTF ~0.5 (2x faster than real-time on M2 Max)
-- Voice cloning from reference audio
-- **v2.0**: Emotion control (8 emotions)
-- Auto-detect model version (1.5/2.0)
+- Native MLX GPT, codec, S2Mel/DiT, and BigVGAN inference for IndexTTS 2.5
+- IndexTTS 2.0 standard and local Vietnamese profiles remain supported
+- Chinese, English, Japanese, Spanish, and Arabic synthesis in 2.5
+- Cross-lingual voice transfer and version-safe speaker caches
+- Separate audio, manual eight-value, and Qwen text emotion controls
+- Pinyin, CMU phoneme, and Kana pronunciation annotations
+- Completed-segment streaming, batch generation, FastAPI, and Gradio
+- fp32, fp16, 8-bit, and 4-bit-capable model conversion
+
+IndexTTS 1.5 files may remain for compatibility, but 1.5 is no longer maintained
+or part of the regression target. See [the complete 2.5 guide](docs/indextts-2.5.md)
+and [the executed validation record](docs/indextts-2.5-validation.md).
 
 ## Official Feature Parity
 
-Checked against the official IndexTTS2 capability set: zero-shot cloning,
-speaker/emotion disentanglement, audio/text/manual emotion control, duration
-control, Chinese/English generation, API/WebUI usage, and batch workflows.
+Checked against the pinned public IndexTTS 2.5 source/model revisions and the
+preserved 2.0 capability set.
 
 | Official capability | Local MLX status | Notes |
 | --- | --- | --- |
-| IndexTTS 1.5 / IndexTTS2 model conversion | Preserved | `convert` auto-detects 1.5 vs 2.0. |
-| Zero-shot speaker cloning | Preserved | Raw WAV refs and precomputed `.npz` speaker caches are supported. |
-| Speaker / emotion disentanglement | Preserved | `--ref-audio` and `--emotion-ref-audio` are separate; emotion sources are mutually exclusive. |
-| Manual 8-emotion vectors / mixes | Preserved | `--emotion happy`, mixed weights, and `--emo-alpha` are exposed. |
-| Text emotion via official Qwen emotion model | Preserved | Converted MLX model at `models/qwen0.6bemo4-merge-mlx-8bit`. |
-| Audio emotion reference | Preserved | CLI/API/WebUI/batch CSV support `emotion_ref_audio`. |
-| Duration control | Partially preserved | `--target-duration` now maps seconds to a mel-token budget; `--fit-duration` explicitly applies pitch-preserving stretch when exact file length matters. |
-| Batch / novel / dialogue generation | Extended | Adds planner, merged WAV, Qwen smoothing, scene emotion library, and crosstalk catalogs. |
-| API and WebUI | Preserved as local replacements | Lightweight FastAPI and Gradio entrypoints share the same runtime cache. |
-| Streaming | Not production | `generate_stream` is still a placeholder, not a true low-latency stream. |
-| Vietnamese profile | Local extension | Uses a separate Vietnamese checkpoint/profile beyond the official zh/en baseline. |
+| 2.0 / 2.5 conversion | Implemented | Strict 2.5 manifests plus preserved 2.0 conversion. |
+| Zero-shot speaker cloning | Implemented | Raw WAV refs and version-safe `.npz` caches. |
+| Five-language / cross-lingual 2.5 | Implemented | `zh`, `en`, `ja`, `es`, `ar`; explicit `en`/`es` is recommended. |
+| Speaker / emotion disentanglement | Implemented | Speaker, emotion audio, manual vector, and Qwen modes are mutually exclusive. |
+| Qwen emotion text | Implemented | Supports synthesis text or independent `--emotion-text`. |
+| Pronunciation annotations | Implemented | Chinese Pinyin, English CMU, Japanese Kana. |
+| Duration controls | Implemented with caveat | 2.5 `duration_factor`, token budgets, and explicit pitch-preserving fitting; no unsupported upstream precision claim. |
+| Batch / API / WebUI | Implemented | Per-row language/references, combined WAV, REST, and Gradio. |
+| Streaming | Implemented | Completed safe text segments; not token-level waveform streaming. |
+| Vietnamese profile | Preserved local extension | Continues on the 2.0 Vietnamese checkpoint. |
 
 ## Current Crosstalk Benchmark Role
 
@@ -54,26 +61,26 @@ Use IndexTTS2 when the task needs separated speaker and emotion references, Viet
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Clone and install
-git clone https://github.com/user/mlx-indextts.git
-cd mlx-indextts
+git clone https://github.com/vanch007/mlx-indextts2.git
+cd mlx-indextts2
 
-# Basic install (generation only)
-uv sync
+# IndexTTS 2.5 generation
+uv sync --extra v25
 
-# With model conversion support (requires torch)
-uv sync --extra convert
+# Complete local interfaces
+uv sync --extra v25 --extra qwen --extra api --extra webui
 ```
 
 ## Quick Start
 
-### Local 8bit Defaults
+### Local 8-bit Defaults
 
 This checkout has been tuned for Apple Silicon IndexTTS2 migration work on an
-M3 Max Mac. If `--model` is omitted, the CLI now uses local 8bit IndexTTS2
-models by default:
+M3 Max Mac. If `--model` is omitted, the CLI uses these local models:
 
-- standard / Chinese / English: `models/mlx-indexTTS2-standard-8bit`
-- Vietnamese: `models/mlx-indexTTS2-vietnamese-8bit`
+- IndexTTS 2.5 / non-Vietnamese: `models/mlx-IndexTTS-2.5-8bit`
+- preserved IndexTTS 2.0 standard: `models/mlx-indexTTS2-standard-8bit`
+- local Vietnamese 2.0 profile: `models/mlx-indexTTS2-vietnamese-8bit`
 
 Vietnamese is auto-selected when the input text contains Vietnamese tone marks.
 You can override the default paths with environment variables:
@@ -81,54 +88,75 @@ You can override the default paths with environment variables:
 ```bash
 export MLX_INDEXTTS_STANDARD_MODEL=/path/to/standard-8bit
 export MLX_INDEXTTS_VIETNAMESE_MODEL=/path/to/vietnamese-8bit
+export MLX_INDEXTTS_V25_MODEL=/path/to/mlx-IndexTTS-2.5-8bit
 ```
 
-### 1. Convert Model (auto-detects version)
+### 1. Convert Model
 
 ```bash
-# Convert IndexTTS 1.5
-uv run mlx-indextts convert \
-    --model-dir /path/to/indexTTS-1.5 \
-    -o models/mlx-indexTTS-1.5
+# Download the pinned official 2.5 snapshot
+hf download IndexTeam/IndexTTS-2.5 \
+    --revision d0aa86e75bb6f3437f3831e95056fa72842d89ef \
+    --local-dir models/IndexTTS-2.5-source
 
-# Convert IndexTTS 2.0
+# Convert IndexTTS 2.5 to the recommended persistent 8-bit model
+uv run mlx-indextts convert \
+    --model-dir models/IndexTTS-2.5-source \
+    --output models/mlx-IndexTTS-2.5-8bit \
+    --dtype float16 --quantize 8 \
+    --source-revision d0aa86e75bb6f3437f3831e95056fa72842d89ef
+
+# Existing IndexTTS 2.0 conversion remains available
 uv run mlx-indextts convert \
     --model-dir /path/to/indexTTS-2 \
     -o models/mlx-indexTTS-2.0
 ```
 
-### 2. Generate Speech (auto-detects version)
+The 2.5 converter also supports full fp16/fp32 and 4-bit GPT output, strict
+tensor coverage, resumable staging, and atomic publication. See the
+[2.5 conversion guide](docs/indextts-2.5.md#download-and-convert).
+
+### 2. Generate Speech
 
 ```bash
-# v1.5
+# IndexTTS 2.5 multilingual voice cloning
 uv run mlx-indextts generate \
-    -m models/mlx-indexTTS-1.5 \
+    --profile v25 \
+    -r reference.wav \
+    --language en \
+    -t "Hello, this is a cross-lingual voice cloning test." \
+    -o output_v25.wav
+
+# Japanese, Spanish, and Arabic use the same 2.5 model
+uv run mlx-indextts generate --profile v25 \
+    -r reference.wav --language ja \
+    -t "こんにちは、これは日本語の音声合成テストです。" \
+    -o output_ja.wav
+
+# Preserved IndexTTS 2.0 standard profile
+uv run mlx-indextts generate \
+    --profile standard \
     -r reference.wav \
     -t "你好，这是一个语音合成测试。" \
-    -o output.wav
+    -o output_v20.wav
 
-# v2.0
+# 2.0 and 2.5 share named/mixed emotion controls
 uv run mlx-indextts generate \
-    -m models/mlx-indexTTS-2.0 \
-    -r reference.wav \
-    -t "你好，这是一个语音合成测试。" \
-    -o output.wav
-
-# v2.0 with emotion control
-uv run mlx-indextts generate \
+    --profile v25 --language zh \
     -r reference.wav \
     -t "今天真是太开心了！" \
     -o output.wav \
     --emotion happy --emo-alpha 0.6
 
-# v2.0 with MLX-native Qwen text emotion
+# Qwen can analyze the synthesis text or an independent emotion description
 uv sync --extra qwen
 uv run python scripts/convert_qwen_emotion_mlx.py
 uv run mlx-indextts generate \
-    -r speaker_v20.npz \
+    --profile v25 --language zh \
+    -r speaker_v25.npz \
     -t "我今天很开心，终于见到你了。" \
     -o output_qwen.wav \
-    --auto-emotion
+    --emotion-text "一种终于重逢后的快乐和激动"
 
 # Vietnamese uses the local Vietnamese 8bit model automatically
 uv run mlx-indextts generate \
@@ -136,7 +164,7 @@ uv run mlx-indextts generate \
     -t "Đêm nay gió rất nhẹ, ánh đèn ngoài cửa sổ chậm rãi sáng lên." \
     -o output_vi.wav
 
-# v2.0 duration-oriented generation
+# Duration-oriented generation remains available for both versions
 uv run mlx-indextts generate \
     -r speaker_v20.npz \
     -t "这一句需要贴近视频时长。" \
@@ -157,26 +185,27 @@ uv run mlx-indextts generate \
 Pre-compute speaker conditioning to skip audio preprocessing on subsequent generations.
 
 ```bash
-# v1.5
-uv run mlx-indextts speaker \
-    -m models/mlx-indexTTS-1.5 \
-    -r reference.wav \
-    -o speaker_v15.npz
-
 # v2.0
 uv run mlx-indextts speaker \
-    -m models/mlx-indexTTS-2.0 \
+    --profile standard \
     -r reference.wav \
     -o speaker_v20.npz
 
-# Use pre-computed speaker (much faster loading)
+# v2.5
+uv run mlx-indextts speaker \
+    --profile v25 \
+    -r reference.wav \
+    -o speaker_v25.npz
+
+# Use pre-computed 2.5 speaker conditioning
 uv run mlx-indextts generate \
-    -r speaker_v20.npz \
+    --profile v25 -r speaker_v25.npz --language zh \
     -t "你好，世界！" \
     -o output.wav
 ```
 
-**Note**: v1.5 and v2.0 speaker files are incompatible - each version requires its own .npz file.
+**Note**: 2.0 and 2.5 speaker files are incompatible. The 2.5 cache embeds its
+schema, source revision, preprocessing metadata, tensor shapes, and audio hash.
 
 ### 4. Batch Generation
 
@@ -202,18 +231,22 @@ Qwen emotion analysis runs for the whole batch first, the Qwen model is released
 and `manifest.csv` includes `emotion_json`, `dominant_emotion`, and
 `emotion_source`.
 
+For subtitle-aligned generation, CSV rows may set `target_duration` /
+`target_duration_s`, `fit_duration`, and `max_tokens` / `max_mel_tokens`.
+These controls stay on the model-resident batch path, avoiding one IndexTTS2
+restart per subtitle.
+
+`target_duration` does not reduce the GPT generation cap below the default
+320-token content-safety floor. This lets short cross-language subtitle lines
+reach their natural EOS instead of losing opening or trailing words; exact
+alignment remains the responsibility of opt-in `fit_duration` and its stretch
+guard. An explicit smaller `max_tokens` value remains a hard caller limit.
+
 ## Python API
 
 ```python
-# v1.5
-from mlx_indextts.generate import IndexTTS
-
-tts = IndexTTS.load_model("models/mlx-indexTTS-1.5")
-audio = tts.generate(text="你好", ref_audio="reference.wav")
-tts.save_audio(audio, "output.wav")
-
 # v2.0
-from mlx_indextts.generate_v2 import IndexTTSv2
+from mlx_indextts import IndexTTSv2, IndexTTSv25
 
 tts = IndexTTSv2("models/mlx-indexTTS-2.0")
 audio = tts.generate(
@@ -222,6 +255,15 @@ audio = tts.generate(
     output_path="output.wav",
     emotion="happy",
     emo_alpha=0.6,
+)
+
+# v2.5
+tts25 = IndexTTSv25("models/mlx-IndexTTS-2.5-8bit")
+audio = tts25.generate(
+    text="Hola, esta es una prueba.",
+    reference_audio="speaker_v25.npz",
+    output_path="output_es.wav",
+    language="es",
 )
 ```
 
@@ -237,17 +279,22 @@ Required:
 
 Common options:
   -m, --model        Model directory (optional; local 8bit defaults if omitted)
-  --profile          auto / standard / vietnamese / vi
-  --max-tokens       Max mel tokens (default: 800 for v1.5, 1500 for v2.0)
-  --temperature      Sampling temperature (default: 1.0 for v1.5, 0.8 for v2.0)
+  --profile          auto / v25 / 2.5 / standard / vietnamese / vi
+  --language         auto / zh / en / ja / es / ar (2.5)
+  --max-tokens       Max semantic tokens (default: 1500 for v2.0/v2.5)
+  --temperature      Sampling temperature (default: 0.8 for v2.0/v2.5)
   --seed, -s         Random seed for reproducibility
   -v, --verbose      Verbose output
   -p, --play         Play audio after generation
   --quantize, -q     Runtime quantization: 4, 8, or fp32
 
-v2.0 only:
+v2.0 and v2.5:
   --emotion          Emotion: happy/sad/angry/afraid/disgusted/melancholic/surprised/calm/auto-qwen
   --auto-emotion     Use the MLX-native Qwen text emotion model before TTS
+  --emotion-text     Derive emotion from an independent text description
+  --use-random       Randomly select emotion prototypes
+  --emotion-ref-audio
+                     Separate emotion reference audio or compatible speaker cache
   --qwen-emotion-model
                      Converted Qwen emotion model path (default: models/qwen0.6bemo4-merge-mlx-8bit)
   --qwen-unload-after / --no-qwen-unload-after
@@ -255,6 +302,12 @@ v2.0 only:
   --emo-alpha        Emotion intensity 0.0-1.0 (default: 0.6, recommend ≤ 0.8)
   --diffusion-steps  Diffusion steps (default: 16)
   --cfg-rate         CFG rate (default: 0.7)
+
+v2.5:
+  --text-normalization / --no-text-normalization
+  --duration-factor  S2Mel target-length multiplier
+  --use-gpt-latent   Enable the optional upstream GPT latent branch
+  --stream           Yield completed safe text segments and assemble the WAV
 ```
 
 ### Qwen Text Emotion
@@ -383,7 +436,10 @@ Endpoints:
 - `GET /health`
 - `GET /profiles`
 - `POST /generate`
+- `POST /generate/stream` (newline-delimited completed-segment WAV events)
 - `POST /speaker`
+- `POST /batch`
+- `POST /plan`
 - `GET /audio?path=outputs/api_output.wav`
 
 Example:
@@ -392,12 +448,12 @@ Example:
 curl -X POST http://127.0.0.1:7862/generate \
   -H 'content-type: application/json' \
   -d '{
-    "text": "Đêm nay gió rất nhẹ.",
-    "ref_audio": "speakers/ban_khoe_vietnamese_v2.npz",
-    "profile": "vietnamese",
-    "output_path": "outputs/api_vi.wav",
-    "auto_emotion": true,
-    "diffusion_steps": 16
+    "text": "Hola, esta es una prueba.",
+    "ref_audio": "speakers/reference_v25.npz",
+    "profile": "v25",
+    "language": "es",
+    "output_path": "outputs/api_es.wav",
+    "diffusion_steps": 25
   }'
 ```
 
@@ -410,23 +466,25 @@ uv sync --extra webui
 uv run mlx-indextts-webui
 ```
 
-The WebUI uses the same single-model cache and 8bit defaults as the CLI/API, so
-standard and Vietnamese models are not kept loaded at the same time.
+The WebUI uses the same single-model cache and 8-bit defaults as the CLI/API.
+It exposes 2.5 language selection, pronunciation guidance, all emotion modes,
+normalization/duration controls, and completed-segment progress. Only one 2.0
+or 2.5 model is kept loaded at a time.
 
 ## Version Comparison
 
-| Feature | v1.5 | v2.0 |
+| Feature | v2.0 | v2.5 |
 |---------|------|------|
-| Sample rate | 24000 Hz | 22050 Hz |
-| Max tokens | 800 | 1815 |
-| Default temperature | 1.0 | 0.8 |
-| Emotion control | ❌ | ✅ 8 emotions |
-| S2Mel (CFM) | ❌ | ✅ |
-| BigVGAN | Custom | nvidia pretrained |
-| Runtime quantization | ✅ | ✅ |
-| Speaker pre-compute | ✅ | ✅ |
+| Sample rate | 22050 Hz | 22050 Hz |
+| Languages | Chinese, English; local Vietnamese profile | Chinese, English, Japanese, Spanish, Arabic |
+| Cross-lingual transfer | Chinese / English | Chinese reference → en / ja / es / ar validated |
+| Emotion control | 8 emotions + audio + Qwen | 8 emotions + audio + Qwen + independent emotion text |
+| Pronunciation annotations | No | Pinyin / CMU / Kana |
+| Completed-segment streaming | No | Yes |
+| Persistent GPT quantization | Yes | Yes |
+| Speaker pre-compute | Legacy cache | Revision/schema-safe cache |
 
-## Supported Emotions (v2.0)
+## Supported Emotions (v2.0 / v2.5)
 
 | English | 中文 |
 |---------|------|
@@ -443,13 +501,25 @@ Mixed emotions: `--emotion "happy:0.6,sad:0.4"`
 
 ## Performance
 
-| Metric | v1.5 | v2.0 |
-|--------|------|------|
-| RTF (M2 Max) | ~0.5 | ~1.3 |
-| Load time (.wav) | ~0.3s | ~9s |
-| Load time (.npz) | ~0.3s | ~1.5s |
+Matched local M3 Max validation used the same raw Chinese reference, the same
+Chinese/English texts, persistent 8-bit GPT models, 16 diffusion steps, and
+version-specific speaker caches:
 
-### Local M3 Max Benchmark
+| Metric | v2.0 | v2.5 |
+| --- | ---: | ---: |
+| Cold model load | 1.484s | 0.226s |
+| Raw reference preprocessing | 10.837s | 4.293s |
+| Warm Chinese RTF | 1.388 | 1.043 |
+| Warm English RTF | 1.840 | 1.074 |
+| Mean warm RTF | 1.614 | 1.059 |
+
+Both versions passed matched ASR sanity checks. The 2.5 five-language default
+25-step validation produced RTF 1.70–2.19; English, Japanese, Spanish, and
+Arabic had zero ASR edit errors on the selected short cases, while Chinese CER
+was 0.227 due mainly to product-name/number spelling. These are environment- and
+sample-specific engineering results, not a claim of the paper's 2.28× speedup.
+
+### Historical 2.0 Quantization Benchmark
 
 These results were measured in `/Users/vanch/mlx-indextts2` with precomputed
 speaker `.npz`, `memory_limit=24GB`, `diffusion_steps=16`, and emotion `calm`.
@@ -464,12 +534,24 @@ RTF lower is faster.
 | vi short | 1.562 | 1.471 | 0.976 | 2.329 |
 | vi long | 1.557 | 1.500 | 0.965 | 1.822 |
 
-8bit is the default local choice because it was fastest in every benchmark case.
-The upstream 8bit conversion quantizes GPT only; S2Mel and BigVGAN remain fp32.
+8-bit remains the default local choice. Persistent 2.5 quantization applies to
+GPT; EnhancedCodec, S2Mel/DiT, and BigVGAN retain the selected conversion dtype.
 
-## License
+Reproducible reports are written by `scripts/validate_v25_matrix.py`,
+`scripts/asr_validate_v25.py`, `scripts/similarity_validate_v25.py`, and
+`scripts/benchmark_v20_v25.py` under `outputs/validation/`.
 
-MIT License
+## License and Responsible Use
+
+Repository code uses the license in this repository. Official IndexTTS weights
+and converted/quantized derivatives are governed by the upstream
+**bilibili Model Use License Agreement**, including its commercial thresholds,
+downstream notice obligations, and use restrictions. Keep the upstream license
+with every model copy.
+
+Only clone voices you own or have explicit permission to use. The model does
+not verify identity or consent; do not use it for impersonation, deception,
+privacy infringement, unlawful content, or prohibited high-risk deployment.
 
 ## Acknowledgments
 

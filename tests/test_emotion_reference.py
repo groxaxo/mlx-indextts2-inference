@@ -77,6 +77,30 @@ def test_batch_csv_reads_role_alias(tmp_path: Path):
     assert _read_batch_items(str(csv_path))[0]["speaker"] == "逗哏"
 
 
+def test_batch_csv_preserves_duration_fit_fields(tmp_path: Path):
+    from mlx_indextts.cli import _read_batch_items
+
+    csv_path = tmp_path / "timed_dialogue.csv"
+    with csv_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["text", "ref_audio", "target_duration_s", "fit_duration", "max_mel_tokens"],
+        )
+        writer.writeheader()
+        writer.writerow({
+            "text": "Timed line",
+            "ref_audio": "speaker.npz",
+            "target_duration_s": "2.75",
+            "fit_duration": "true",
+            "max_mel_tokens": "180",
+        })
+
+    item = _read_batch_items(str(csv_path))[0]
+    assert item["target_duration"] == "2.75"
+    assert item["fit_duration"] == "true"
+    assert item["max_tokens"] == "180"
+
+
 def test_auto_emotion_weights_are_scaled_to_full_total():
     from mlx_indextts.runtime import _normalize_emotion_total
 
@@ -87,6 +111,18 @@ def test_auto_emotion_weights_are_scaled_to_full_total():
     assert round(sum(weights.values()), 4) == 1.0
 
 
+def test_runtime_reports_separate_emotion_reference_source():
+    from mlx_indextts.runtime import GenerateOptions, TTSRuntime
+
+    emotion, metadata = TTSRuntime()._resolve_auto_emotion(
+        "text",
+        GenerateOptions(emotion_ref_audio="emotion.wav"),
+    )
+
+    assert emotion is None
+    assert metadata["emotion_source"] == "emotion_reference"
+
+
 def test_emotion_sources_are_mutually_exclusive():
     import pytest
 
@@ -95,6 +131,7 @@ def test_emotion_sources_are_mutually_exclusive():
     validate_emotion_source(GenerateOptions(emotion_ref_audio="calm.npz"))
     validate_emotion_source(GenerateOptions(emotion="angry"))
     validate_emotion_source(GenerateOptions(auto_emotion=True))
+    validate_emotion_source(GenerateOptions(use_emo_text=True, emo_text="fear"))
 
     with pytest.raises(ValueError):
         validate_emotion_source(GenerateOptions(auto_emotion=True, emotion_ref_audio="calm.npz"))
@@ -102,6 +139,10 @@ def test_emotion_sources_are_mutually_exclusive():
         validate_emotion_source(GenerateOptions(emotion="angry", emotion_ref_audio="calm.npz"))
     with pytest.raises(ValueError):
         validate_emotion_source(GenerateOptions(emotion="auto-qwen"), has_row_emotion_refs=True)
+    with pytest.raises(ValueError):
+        validate_emotion_source(
+            GenerateOptions(use_emo_text=True, emo_text="fear", emotion="angry")
+        )
 
 
 def test_gpt_v2_merge_emovec_formula():

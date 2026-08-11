@@ -522,8 +522,11 @@ class IndexTTSv25(IndexTTSv2):
             use_emo_text=use_emo_text,
         )
         if seed is not None:
+            import random
+
             mx.random.seed(seed)
             torch.manual_seed(seed)
+            random.seed(seed)
 
         prepared = self.text_frontend.prepare(
             text,

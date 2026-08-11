@@ -15,7 +15,7 @@ import sys
 import time
 import warnings
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
@@ -94,6 +94,24 @@ def parse_emotion(emotion_str: str) -> Dict[str, float]:
         result["calm"] = 1.0
 
     return result
+
+
+def normalize_emotion_input(
+    emotion: Union[str, Dict[str, float], Sequence[float]],
+) -> Dict[str, float]:
+    """Normalize the official named/mapped/eight-value emotion contract."""
+    if isinstance(emotion, str):
+        return parse_emotion(emotion)
+    if isinstance(emotion, dict):
+        return emotion
+    if isinstance(emotion, Sequence):
+        if len(emotion) != len(EMOTION_CATEGORIES):
+            raise ValueError("emotion vector must contain exactly eight values")
+        return {
+            name: max(0.0, min(1.2, float(value)))
+            for name, value in zip(EMOTION_CATEGORIES, emotion)
+        }
+    raise TypeError("emotion must be a name, mapping, or eight-value sequence")
 
 
 class IndexTTSv2:
@@ -661,6 +679,34 @@ class IndexTTSv2:
         self.cache = cache
         return cache
 
+    def _mlx_reference_features(self, ref_data: dict) -> dict:
+        """Materialize and cache MLX reference features and GPT conditioning.
+
+        ``_process_reference_audio`` caches PyTorch tensors, but repeated batch
+        generation previously converted them through NumPy and reran the
+        speaker/emotion Perceivers for every line. These arrays are immutable
+        for a loaded model, so keeping the evaluated MLX results is safe.
+        """
+        cached = ref_data.get("_mlx_features")
+        if cached is not None:
+            return cached
+
+        semantic = mx.array(ref_data["spk_cond_emb"].detach().cpu().numpy())
+        semantic_ncl = semantic.transpose(0, 2, 1)
+        lengths = mx.array([semantic.shape[1]])
+        features = {
+            "semantic_ncl": semantic_ncl,
+            "lengths": lengths,
+            "speech_cond": self.gpt.get_conditioning(semantic_ncl, lengths),
+            "emotion_vec": self.gpt.get_emovec(semantic_ncl, lengths),
+            "prompt_condition": mx.array(ref_data["prompt_condition"].detach().cpu().numpy()),
+            "ref_mel": mx.array(ref_data["ref_mel"].detach().cpu().numpy()),
+            "style": mx.array(ref_data["style"].detach().cpu().numpy()),
+        }
+        mx.eval(*features.values())
+        ref_data["_mlx_features"] = features
+        return features
+
     def _compute_emotion_vector(
         self,
         emotion_weights: Dict[str, float],
@@ -727,8 +773,9 @@ class IndexTTSv2:
         repetition_penalty: float = 10.0,
         diffusion_steps: int = 25,
         cfg_rate: float = 0.7,
-        emotion: Optional[Union[str, Dict[str, float]]] = None,
+        emotion: Optional[Union[str, Dict[str, float], Sequence[float]]] = None,
         emo_alpha: float = 0.6,
+        use_random: bool = False,
         seed: Optional[int] = None,
         verbose: bool = False,
         segment_overlap_ms: int = 50,
@@ -774,10 +821,7 @@ class IndexTTSv2:
 
         # 1. Process speaker reference audio (PyTorch preprocessing)
         ref_data = self._process_reference_audio(reference_audio)
-        spk_cond_emb_pt = ref_data['spk_cond_emb']  # PyTorch tensor
         style_pt = ref_data['style']
-        prompt_condition_pt = ref_data['prompt_condition']
-        ref_mel_pt = ref_data['ref_mel']
 
         # Optional separate emotion reference. If omitted, match the official
         # behavior by using the speaker reference as the emotion reference.
@@ -785,14 +829,8 @@ class IndexTTSv2:
             emo_ref_data = self._process_reference_audio(emotion_reference_audio)
         else:
             emo_ref_data = ref_data
-        emo_cond_emb_pt = emo_ref_data['spk_cond_emb']
-
-        # Convert to MLX for GPT
-        spk_cond_emb = mx.array(spk_cond_emb_pt.cpu().numpy())  # (1, T, 1024)
-        # GPT expects NCL format: (batch, 1024, time)
-        spk_cond_emb_ncl = spk_cond_emb.transpose(0, 2, 1)
-        emo_cond_emb = mx.array(emo_cond_emb_pt.cpu().numpy())
-        emo_cond_emb_ncl = emo_cond_emb.transpose(0, 2, 1)
+        speaker_features = self._mlx_reference_features(ref_data)
+        emotion_features = self._mlx_reference_features(emo_ref_data)
 
         # 2. Tokenize text and split into segments
         text_tokens_list = self.tokenizer.tokenize(text)
@@ -810,27 +848,18 @@ class IndexTTSv2:
 
         # 3. GPT conditioning (MLX)
         # Speaker conditioning
-        cond_lengths = mx.array([spk_cond_emb.shape[1]])
-        speech_cond = self.gpt.get_conditioning(spk_cond_emb_ncl, cond_lengths)
+        speech_cond = speaker_features["speech_cond"]
 
         # Emotion conditioning
         # Base emotion vector from speaker + emotion references.
-        emo_cond_lengths = mx.array([emo_cond_emb.shape[1]])
         ref_emo_alpha = max(0.0, min(1.0, emo_alpha)) if emotion_reference_audio else 1.0
-        base_emo_vec = self.gpt.merge_emovec(
-            spk_cond_emb_ncl,
-            emo_cond_emb_ncl,
-            cond_lengths,
-            emo_cond_lengths,
-            alpha=ref_emo_alpha,
-        )
+        speaker_emo_vec = speaker_features["emotion_vec"]
+        emotion_emo_vec = emotion_features["emotion_vec"]
+        base_emo_vec = speaker_emo_vec + ref_emo_alpha * (emotion_emo_vec - speaker_emo_vec)
 
         if emotion is not None:
             # Parse emotion specification
-            if isinstance(emotion, str):
-                emotion_weights = parse_emotion(emotion)
-            else:
-                emotion_weights = emotion
+            emotion_weights = normalize_emotion_input(emotion)
 
             # PyTorch pre-scales emotion weights by emo_alpha (infer_v2.py:414-418)
             emo_scale = max(0.0, min(1.0, emo_alpha))
@@ -843,7 +872,11 @@ class IndexTTSv2:
             # Compute emovec_mat from emo_matrix (feat2.pt) using scaled weights.
             # In PyTorch, emovec_mat is used DIRECTLY without any projection layers.
             # It's already in model_dim (1280) space from feat2.pt.
-            emovec_mat_pt = self._compute_emotion_vector(emotion_weights, style_pt)
+            emovec_mat_pt = self._compute_emotion_vector(
+                emotion_weights,
+                style_pt,
+                use_random=use_random,
+            )
             emovec_mat = mx.array(emovec_mat_pt.cpu().numpy())
 
             # PyTorch formula (infer_v2.py:561):
@@ -862,9 +895,9 @@ class IndexTTSv2:
         conditioning = self.gpt.prepare_conditioning_latents(speech_cond, emo_vec, batch_size=1)
 
         # Pre-compute MLX arrays for reuse
-        prompt_condition = mx.array(prompt_condition_pt.cpu().numpy())
-        ref_mel = mx.array(ref_mel_pt.cpu().numpy())
-        style = mx.array(style_pt.cpu().numpy())
+        prompt_condition = speaker_features["prompt_condition"]
+        ref_mel = speaker_features["ref_mel"]
+        style = speaker_features["style"]
 
         # 4. Generate audio for each segment
         all_audio = []

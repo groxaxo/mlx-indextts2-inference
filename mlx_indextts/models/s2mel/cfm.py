@@ -160,16 +160,21 @@ class CFM(nn.Module):
                 mu[:, prompt_len:, :]
             ], axis=1)
 
-        sol = []
+        # CFG null inputs are invariant across Euler steps. Constructing these
+        # large tensors inside every step adds avoidable unified-memory traffic.
+        if inference_cfg_rate > 0:
+            null_prompt_x = mx.zeros_like(prompt_x)
+            null_style = mx.zeros_like(style)
+            null_mu = mx.zeros_like(mu)
+            stacked_prompt_x = mx.concatenate([prompt_x, null_prompt_x], axis=0)
+            stacked_style = mx.concatenate([style, null_style], axis=0)
+            stacked_mu = mx.concatenate([mu, null_mu], axis=0)
 
         for step in range(1, len(t_span)):
             dt = t_span[step] - t_span[step - 1]
 
             if inference_cfg_rate > 0:
                 # CFG: stack original and null inputs
-                stacked_prompt_x = mx.concatenate([prompt_x, mx.zeros_like(prompt_x)], axis=0)
-                stacked_style = mx.concatenate([style, mx.zeros_like(style)], axis=0)
-                stacked_mu = mx.concatenate([mu, mx.zeros_like(mu)], axis=0)
                 stacked_x = mx.concatenate([x, x], axis=0)
                 stacked_t = mx.array([t, t])
 
@@ -199,11 +204,6 @@ class CFM(nn.Module):
             # Euler step
             x = x + dt * dphi_dt
             t = t + dt
-            sol.append(x)
-
-            # Update dt for next step
-            if step < len(t_span) - 1:
-                dt = t_span[step + 1] - t
 
             # Keep prompt region zero - use concatenation instead of .at[].set()
             x = mx.concatenate([
@@ -214,7 +214,7 @@ class CFM(nn.Module):
             # Evaluate for MLX lazy execution
             mx.eval(x)
 
-        return sol[-1]
+        return x
 
     def __call__(
         self,

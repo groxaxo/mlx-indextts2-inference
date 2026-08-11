@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import base64
+import io
+import json
 import threading
 from pathlib import Path
 from typing import Any
@@ -16,14 +19,14 @@ OUTPUTS_ROOT = (Path.cwd() / "outputs").resolve()
 def _import_fastapi():
     try:
         from fastapi import FastAPI, HTTPException
-        from fastapi.responses import FileResponse
+        from fastapi.responses import FileResponse, StreamingResponse
         from pydantic import BaseModel
     except ImportError as exc:
         raise SystemExit("Install API dependencies first: uv sync --extra api") from exc
-    return FastAPI, HTTPException, FileResponse, BaseModel
+    return FastAPI, HTTPException, FileResponse, StreamingResponse, BaseModel
 
 
-FastAPI, HTTPException, FileResponse, BaseModel = _import_fastapi()
+FastAPI, HTTPException, FileResponse, StreamingResponse, BaseModel = _import_fastapi()
 app = FastAPI(title="MLX-IndexTTS API")
 
 
@@ -64,10 +67,13 @@ class GenerateRequest(BaseModel):
     repetition_penalty: float = 10.0
     diffusion_steps: int = 16
     cfg_rate: float = 0.7
-    emotion: str | None = None
+    emotion: str | dict[str, float] | list[float] | None = None
     emo_alpha: float = 0.6
     emotion_ref_audio: str | None = None
     auto_emotion: bool = False
+    use_emo_text: bool = False
+    emo_text: str | None = None
+    use_random: bool = False
     qwen_emotion_model: str | None = None
     qwen_unload_after: bool = True
     smooth_emotion: bool = True
@@ -76,7 +82,17 @@ class GenerateRequest(BaseModel):
     seed: int | None = None
     segment_overlap: int = 50
     speed: float = 1.0
+    target_duration: float | None = None
+    fit_duration: bool = False
+    max_fit_stretch_ratio: float = 2.0
     verbose: bool = False
+    dynamic_max_tokens: bool = False
+    tokens_per_char: float = 14.0
+    min_max_tokens: int = 320
+    language: str = "auto"
+    text_normalization: bool = True
+    duration_factor: float = 1.0
+    use_gpt_latent: bool = False
 
 
 class SpeakerRequest(BaseModel):
@@ -107,28 +123,40 @@ class PlanRequest(BaseModel):
 
 @app.get("/health")
 def health() -> dict:
+    model_obj = getattr(runtime, "_model", None)
+    manifest = getattr(model_obj, "manifest", {}) if model_obj is not None else {}
     return {
         "ok": True,
         "model": runtime.model_path,
         "version": runtime.version,
+        "model_revision": manifest.get("source_revision"),
+        "supported_languages": manifest.get("supported_languages", []),
+        "quantization": manifest.get("quantization"),
     }
 
 
 @app.get("/profiles")
 def profiles() -> dict:
     return {
+        "v25": "models/mlx-IndexTTS-2.5-8bit",
         "standard": "models/mlx-indexTTS2-standard-8bit",
         "vietnamese": "models/mlx-indexTTS2-vietnamese-8bit",
     }
 
 
+def _options_from_request(req: GenerateRequest) -> GenerateOptions:
+    return GenerateOptions(
+        **{
+            key: getattr(req, key)
+            for key in GenerateOptions.__dataclass_fields__
+        }
+    )
+
+
 @app.post("/generate")
 def generate(req: GenerateRequest) -> dict:
     output_path = _prepare_output_path(req.output_path)
-    options = GenerateOptions(**{
-        key: getattr(req, key)
-        for key in GenerateOptions.__dataclass_fields__
-    })
+    options = _options_from_request(req)
     try:
         with runtime_lock:
             return runtime.generate(
@@ -141,6 +169,52 @@ def generate(req: GenerateRequest) -> dict:
             )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/generate/stream")
+def generate_stream(req: GenerateRequest):
+    """Stream completed 2.5 text segments as newline-delimited WAV payloads."""
+    options = _options_from_request(req)
+
+    def events():
+        try:
+            with runtime_lock:
+                for chunk in runtime.stream(
+                    text=req.text,
+                    ref_audio=req.ref_audio,
+                    profile=req.profile,
+                    model=req.model,
+                    options=options,
+                ):
+                    import soundfile as sf
+
+                    buffer = io.BytesIO()
+                    sf.write(
+                        buffer,
+                        chunk.audio,
+                        chunk.sample_rate,
+                        format="WAV",
+                        subtype="PCM_16",
+                    )
+                    event = {
+                        "segment_index": chunk.segment_index,
+                        "segment_count": chunk.segment_count,
+                        "sample_rate": chunk.sample_rate,
+                        "completed": chunk.completed,
+                        "resolved_language": chunk.resolved_language,
+                        "audio_wav_base64": base64.b64encode(buffer.getvalue()).decode("ascii"),
+                    }
+                    yield json.dumps(event, ensure_ascii=False) + "\n"
+        except Exception as exc:
+            yield json.dumps(
+                {
+                    "error": str(exc),
+                    "completed": False,
+                },
+                ensure_ascii=False,
+            ) + "\n"
+
+    return StreamingResponse(events(), media_type="application/x-ndjson")
 
 
 @app.get("/audio")
@@ -168,10 +242,7 @@ def speaker(req: SpeakerRequest) -> dict:
 def batch(req: BatchRequest) -> dict:
     output_dir = _prepare_output_dir(req.output_dir)
     base = req.options or GenerateRequest(text="", ref_audio=req.ref_audio or "")
-    options = GenerateOptions(**{
-        key: getattr(base, key)
-        for key in GenerateOptions.__dataclass_fields__
-    })
+    options = _options_from_request(base)
     try:
         with runtime_lock:
             return runtime.batch(
