@@ -45,9 +45,14 @@ V20_SOURCE_FILES = frozenset(
 V25_CONVERTED_FILES = frozenset(
     {
         "config.json",
+        "config.yaml",
         "gpt.safetensors",
         "codec.safetensors",
         "s2mel.safetensors",
+        "bigvgan.safetensors",
+        "feat1.pt",
+        "feat2.pt",
+        "wav2vec2bert_stats.pt",
         V25_TOKENIZER,
     }
 )

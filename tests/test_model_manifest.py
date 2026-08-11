@@ -56,6 +56,10 @@ def test_build_v25_manifest_has_versioned_runtime_contract():
     assert manifest["supported_languages"] == ["zh", "en", "ja", "es", "ar"]
     assert manifest["semantic_codec_frame_rate"] == 25
     assert manifest["speaker_cache_schema_version"] == 1
+    assert manifest["required_auxiliary_resources"] == [
+        "facebook/w2v-bert-2.0",
+        "funasr/campplus",
+    ]
 
 
 def test_collect_source_files_records_size_and_available_hashes(tmp_path: Path):

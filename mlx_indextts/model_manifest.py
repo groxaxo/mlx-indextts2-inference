@@ -101,7 +101,6 @@ def build_v25_manifest(
         or [
             "facebook/w2v-bert-2.0",
             "funasr/campplus",
-            "nvidia/bigvgan_v2_22khz_80band_256x",
         ],
         "speaker_cache_schema_version": SPEAKER_CACHE_SCHEMA_VERSION,
     }
