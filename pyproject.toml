@@ -47,6 +47,11 @@ v2 = [
     "librosa>=0.10.0",
     "einops>=0.8.0",
 ]
+v25 = [
+    "tiktoken>=0.8.0",
+    "fugashi>=1.2.0",
+    "unidic-lite>=1.0.0",
+]
 api = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
