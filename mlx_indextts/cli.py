@@ -12,6 +12,7 @@ from pathlib import Path
 
 DEFAULT_STANDARD_MODEL = "models/mlx-indexTTS2-standard-8bit"
 DEFAULT_VIETNAMESE_MODEL = "models/mlx-indexTTS2-vietnamese-8bit"
+DEFAULT_V25_MODEL = "models/mlx-IndexTTS-2.5-8bit"
 
 
 def looks_vietnamese(text: str) -> bool:
@@ -22,30 +23,38 @@ def looks_vietnamese(text: str) -> bool:
 
 
 def resolve_default_model(profile: str, text: str = "") -> str:
-    """Resolve default local 8bit model path."""
+    """Resolve a local 2.0 profile or the latest 2.5 standard model."""
     standard_model = os.environ.get("MLX_INDEXTTS_STANDARD_MODEL", DEFAULT_STANDARD_MODEL)
     vietnamese_model = os.environ.get("MLX_INDEXTTS_VIETNAMESE_MODEL", DEFAULT_VIETNAMESE_MODEL)
+    v25_model = os.environ.get("MLX_INDEXTTS_V25_MODEL", DEFAULT_V25_MODEL)
     if profile == "auto":
-        profile = "vietnamese" if looks_vietnamese(text) else "standard"
+        if looks_vietnamese(text):
+            profile = "vietnamese"
+        else:
+            profile = "v25" if Path(v25_model).is_dir() else "standard"
     if profile in {"vi", "vietnamese"}:
         return vietnamese_model
+    if profile in {"v25", "2.5", "latest"}:
+        return v25_model
     return standard_model
 
 
 def _validate_cli_emotion_sources(
     *,
     auto_emotion: bool,
+    emotion_text: str | None = None,
     emotion: str | None,
     emotion_ref_audio: str | None,
     has_row_emotion_refs: bool = False,
 ) -> None:
-    auto = auto_emotion or emotion == "auto-qwen"
+    auto = auto_emotion or bool(emotion_text) or emotion == "auto-qwen"
     manual = bool(emotion and emotion != "auto-qwen")
     emotion_ref = bool(emotion_ref_audio) or has_row_emotion_refs
     if sum(bool(value) for value in (auto, manual, emotion_ref)) > 1:
         raise SystemExit(
             "Emotion sources are mutually exclusive: use only one of "
-            "--auto-emotion/--emotion auto-qwen, --emotion, or --emotion-ref-audio/CSV emotion_ref_audio."
+            "--auto-emotion/--emotion-text/--emotion auto-qwen, --emotion, "
+            "or --emotion-ref-audio/CSV emotion_ref_audio."
         )
 
 
@@ -114,9 +123,14 @@ def detect_pytorch_version(model_dir: Path) -> str:
 
     Returns '2.0' if s2mel.pth exists, otherwise '1.5'.
     """
-    if (model_dir / "s2mel.pth").exists():
-        return "2.0"
-    return "1.5"
+    from mlx_indextts.model_version import ModelFormatError, detect_source_version
+
+    try:
+        return detect_source_version(model_dir)
+    except ModelFormatError:
+        if (model_dir / "s2mel.pth").exists():
+            return "2.0"
+        return "1.5"
 
 
 def detect_mlx_version(model_dir: Path) -> str:
@@ -124,9 +138,14 @@ def detect_mlx_version(model_dir: Path) -> str:
 
     Returns '2.0' if s2mel.safetensors exists, otherwise '1.5'.
     """
-    if (model_dir / "s2mel.safetensors").exists():
-        return "2.0"
-    return "1.5"
+    from mlx_indextts.model_version import ModelFormatError, detect_converted_version
+
+    try:
+        return detect_converted_version(model_dir)
+    except ModelFormatError:
+        if (model_dir / "s2mel.safetensors").exists():
+            return "2.0"
+        return "1.5"
 
 
 def convert_command(args):
@@ -144,7 +163,19 @@ def convert_command(args):
 
     print(f"Detected IndexTTS version: {version}")
 
-    if version == "2.0":
+    if version == "2.5":
+        from mlx_indextts.convert_v25 import convert_model_v25
+
+        convert_model_v25(
+            source_dir=args.model_dir,
+            output_dir=args.output,
+            dtype=args.dtype,
+            quantize_bits=quantize_bits,
+            source_revision=args.source_revision,
+            resume=args.resume,
+            force=args.force,
+        )
+    elif version == "2.0":
         from mlx_indextts.convert_v2 import convert_model as convert_model_v2
         convert_model_v2(
             model_dir=args.model_dir,
@@ -169,6 +200,7 @@ def generate_command(args):
 
     _validate_cli_emotion_sources(
         auto_emotion=getattr(args, 'auto_emotion', False),
+        emotion_text=getattr(args, 'emotion_text', None),
         emotion=getattr(args, 'emotion', None),
         emotion_ref_audio=getattr(args, 'emotion_ref_audio', None),
     )
@@ -202,7 +234,7 @@ def generate_command(args):
 
     # Default temperature based on version
     if args.temperature is None:
-        temperature = 0.8 if version == "2.0" else 1.0
+        temperature = 0.8 if version in {"2.0", "2.5"} else 1.0
     else:
         temperature = args.temperature
 
@@ -211,7 +243,7 @@ def generate_command(args):
     if args.max_tokens is not None:
         max_tokens = args.max_tokens
     else:
-        max_tokens = 1500 if version == "2.0" else 800
+        max_tokens = 1500 if version in {"2.0", "2.5"} else 800
 
     memory_limit = args.memory_limit
 
@@ -235,6 +267,9 @@ def generate_command(args):
         emo_alpha=getattr(args, 'emo_alpha', 0.6),
         emotion_ref_audio=getattr(args, 'emotion_ref_audio', None),
         auto_emotion=getattr(args, 'auto_emotion', False),
+        use_emo_text=bool(getattr(args, 'emotion_text', None)),
+        emo_text=getattr(args, 'emotion_text', None),
+        use_random=getattr(args, 'use_random', False),
         qwen_emotion_model=getattr(args, 'qwen_emotion_model', None),
         qwen_unload_after=getattr(args, 'qwen_unload_after', True),
         denoise_ref_audio=getattr(args, 'denoise_ref', False),
@@ -246,16 +281,73 @@ def generate_command(args):
         target_duration=getattr(args, 'target_duration', None),
         fit_duration=getattr(args, 'fit_duration', False),
         max_fit_stretch_ratio=getattr(args, 'max_fit_stretch_ratio', 2.0),
+        language=getattr(args, 'language', 'auto'),
+        text_normalization=getattr(args, 'text_normalization', True),
+        duration_factor=getattr(args, 'duration_factor', 1.0),
+        use_gpt_latent=getattr(args, 'use_gpt_latent', False),
     )
     runtime = TTSRuntime(memory_limit_gb=memory_limit, quantize=args.quantize)
-    result = runtime.generate(
-        text=args.text,
-        ref_audio=args.ref_audio,
-        output_path=args.output,
-        profile=args.profile,
-        model=args.model,
-        options=options,
-    )
+    if getattr(args, "stream", False) is True:
+        if version != "2.5":
+            raise SystemExit("--stream currently requires an IndexTTS 2.5 model")
+        import numpy as np
+        import soundfile as sf
+
+        from mlx_indextts.generate import crossfade_segments
+        import mlx.core as mx
+
+        started = time.perf_counter()
+        chunks = []
+        for chunk in runtime.stream(
+            text=args.text,
+            ref_audio=args.ref_audio,
+            profile=args.profile,
+            model=args.model,
+            options=options,
+        ):
+            chunks.append(chunk)
+            print(
+                f"stream segment {chunk.segment_index + 1}/{chunk.segment_count} "
+                f"language={chunk.resolved_language} completed={chunk.completed}"
+            )
+        if not chunks:
+            raise RuntimeError("No streamed audio segments were generated")
+        if len(chunks) > 1 and options.interval_silence <= 0 and options.segment_overlap > 0:
+            audio = np.asarray(
+                crossfade_segments(
+                    [mx.array(chunk.audio) for chunk in chunks],
+                    chunks[0].sample_rate,
+                    options.segment_overlap,
+                )
+            )
+        else:
+            audio = np.concatenate([chunk.audio for chunk in chunks])
+        output = Path(args.output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        sf.write(output, audio, chunks[0].sample_rate)
+        elapsed = time.perf_counter() - started
+        info = getattr(getattr(runtime, "_model", None), "last_generation_info", {})
+        duration = len(audio) / chunks[0].sample_rate
+        result = {
+            "output_path": str(output),
+            "model": args.model,
+            "version": version,
+            "model_revision": info.get("model_revision", ""),
+            "language": chunks[0].resolved_language,
+            "segments": len(chunks),
+            "duration_s": round(duration, 3),
+            "elapsed_s": round(elapsed, 3),
+            "rtf": round(elapsed / duration, 4) if duration else None,
+        }
+    else:
+        result = runtime.generate(
+            text=args.text,
+            ref_audio=args.ref_audio,
+            output_path=args.output,
+            profile=args.profile,
+            model=args.model,
+            options=options,
+        )
     if result.get("emotion_source") == "qwen-mlx":
         print(f"Qwen emotion: {result.get('dominant_emotion')} {result.get('emotion_json')}")
 
@@ -281,7 +373,11 @@ def speaker_command(args):
     print(f"Using IndexTTS {version}")
     print(f"Loading model from {args.model}...")
 
-    if version == "2.0":
+    if version == "2.5":
+        from mlx_indextts.generate_v25 import IndexTTSv25
+
+        tts = IndexTTSv25(model_dir=args.model, memory_limit_gb=args.memory_limit)
+    elif version == "2.0":
         from mlx_indextts.generate_v2 import IndexTTSv2
         tts = IndexTTSv2(model_dir=args.model, memory_limit_gb=args.memory_limit)
     else:
@@ -335,7 +431,7 @@ def _read_batch_items(input_path: str, text_column: str = "text") -> list[dict[s
                     if vector_emotion:
                         emotion = vector_emotion
                     emo_alpha = _first_row_value(row, ("emo_alpha", "情感权重"), "0.6")
-                    items.append({
+                    item = {
                         "id": item_id,
                         "speaker": speaker,
                         "text": text,
@@ -343,7 +439,22 @@ def _read_batch_items(input_path: str, text_column: str = "text") -> list[dict[s
                         "emotion_ref_audio": emotion_ref_audio,
                         "emotion": emotion,
                         "emo_alpha": emo_alpha,
-                    })
+                    }
+                    # Preserve duration controls and token caps for the
+                    # long-lived batch runtime. Dropping these fields forced
+                    # subtitle pipelines back to one cold CLI process per row.
+                    optional_fields = {
+                        "target_duration": ("target_duration", "target_duration_s", "duration"),
+                        "fit_duration": ("fit_duration",),
+                        "max_tokens": ("max_tokens", "max_mel_tokens"),
+                        "language": ("language", "lang", "语言"),
+                        "emotion_text": ("emotion_text", "emo_text"),
+                    }
+                    for output_key, aliases in optional_fields.items():
+                        value = _first_row_value(row, aliases)
+                        if value:
+                            item[output_key] = value
+                    items.append(item)
             return items
     items = []
     for idx, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
@@ -383,13 +494,16 @@ def batch_command(args):
         raise SystemExit("Batch requires --ref-audio unless every CSV row has ref_audio/reference_audio.")
     _validate_cli_emotion_sources(
         auto_emotion=args.auto_emotion,
+        emotion_text=args.emotion_text,
         emotion=args.emotion,
         emotion_ref_audio=args.emotion_ref_audio,
         has_row_emotion_refs=any(bool(item.get("emotion_ref_audio")) for item in items),
     )
 
-    if args.auto_emotion and any(item.get("emotion") for item in items):
-        raise SystemExit("CSV row emotion cannot be combined with --auto-emotion.")
+    if (args.auto_emotion or args.emotion_text) and any(item.get("emotion") for item in items):
+        raise SystemExit(
+            "CSV row emotion cannot be combined with --auto-emotion/--emotion-text."
+        )
 
     all_text = "\n".join(item["text"] for item in items)
     if not args.model:
@@ -421,6 +535,9 @@ def batch_command(args):
         emo_alpha=args.emo_alpha,
         emotion_ref_audio=args.emotion_ref_audio,
         auto_emotion=args.auto_emotion,
+        use_emo_text=bool(args.emotion_text),
+        emo_text=args.emotion_text,
+        use_random=args.use_random,
         qwen_emotion_model=args.qwen_emotion_model,
         qwen_unload_after=args.qwen_unload_after,
         smooth_emotion=not args.no_emotion_smoothing,
@@ -435,6 +552,10 @@ def batch_command(args):
         dynamic_max_tokens=args.dynamic_max_tokens,
         tokens_per_char=args.tokens_per_char,
         min_max_tokens=args.min_max_tokens,
+        language=args.language,
+        text_normalization=args.text_normalization,
+        duration_factor=args.duration_factor,
+        use_gpt_latent=args.use_gpt_latent,
     )
     runtime = TTSRuntime(memory_limit_gb=memory_limit, quantize=args.quantize)
     result = runtime.batch(
@@ -557,19 +678,41 @@ def main():
     """Main entry point for CLI."""
     parser = argparse.ArgumentParser(
         prog="mlx-indextts",
-        description="IndexTTS for Apple Silicon using MLX (supports v1.5 and v2.0)",
+        description="IndexTTS for Apple Silicon using MLX (supports v2.0 and v2.5)",
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     convert_parser = subparsers.add_parser(
         "convert",
-        help="Convert PyTorch model to MLX format (auto-detects v1.5/v2.0)",
+        help="Convert PyTorch model to MLX format (auto-detects v2.0/v2.5)",
     )
     convert_parser.add_argument(
         "--model-dir",
         type=str,
         required=True,
         help="Directory containing PyTorch checkpoints",
+    )
+    convert_parser.add_argument(
+        "--dtype",
+        choices=["float16", "float32", "bfloat16"],
+        default="float16",
+        help="2.5 tensor dtype (default: float16)",
+    )
+    convert_parser.add_argument(
+        "--source-revision",
+        default="d0aa86e75bb6f3437f3831e95056fa72842d89ef",
+        help="Pinned IndexTTS 2.5 Hugging Face source revision",
+    )
+    convert_parser.add_argument(
+        "--resume",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Resume a compatible partial 2.5 conversion (default: true)",
+    )
+    convert_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Archive an existing output/staging directory before conversion",
     )
     convert_parser.add_argument(
         "--output",
@@ -595,7 +738,7 @@ def main():
 
     generate_parser = subparsers.add_parser(
         "generate",
-        help="Generate speech from text (auto-detects v1.5/v2.0)",
+        help="Generate speech from text (auto-detects v2.0/v2.5)",
     )
     generate_parser.add_argument(
         "--model",
@@ -604,12 +747,12 @@ def main():
         default=None,
         help=(
             "Path to converted MLX model directory. If omitted, uses local 8bit defaults: "
-            f"{DEFAULT_STANDARD_MODEL} or {DEFAULT_VIETNAMESE_MODEL}."
+            f"{DEFAULT_V25_MODEL}, {DEFAULT_STANDARD_MODEL}, or {DEFAULT_VIETNAMESE_MODEL}."
         ),
     )
     generate_parser.add_argument(
         "--profile",
-        choices=["auto", "standard", "vietnamese", "vi"],
+        choices=["auto", "v25", "2.5", "standard", "vietnamese", "vi"],
         default="auto",
         help="Default model profile when --model is omitted (default: auto from text)",
     )
@@ -619,6 +762,30 @@ def main():
         type=str,
         required=True,
         help="Reference audio file for voice cloning",
+    )
+    generate_parser.add_argument(
+        "--language",
+        choices=["auto", "zh", "en", "ja", "es", "ar"],
+        default="auto",
+        help="2.5 text language; explicit en/es is recommended for Latin-script text",
+    )
+    generate_parser.add_argument(
+        "--text-normalization",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Apply the 2.5 language-specific text normalizer (default: true)",
+    )
+    generate_parser.add_argument(
+        "--duration-factor",
+        type=float,
+        default=1.0,
+        help="2.5 S2Mel duration multiplier (default: 1.0)",
+    )
+    generate_parser.add_argument(
+        "--use-gpt-latent",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Add the optional GPT latent branch before S2Mel (default: false, matching upstream)",
     )
     generate_parser.add_argument(
         "--text",
@@ -638,7 +805,7 @@ def main():
         "--max-tokens",
         type=int,
         default=None,
-        help="Maximum mel tokens to generate per segment (default: 800 for v1.5, 1500 for v2.0)",
+        help="Maximum semantic tokens per segment (default: 1500 for v2.0/v2.5)",
     )
     generate_parser.add_argument(
         "--max-text-tokens",
@@ -650,7 +817,7 @@ def main():
         "--temperature",
         type=float,
         default=None,
-        help="Sampling temperature (default: 1.0 for v1.5, 0.8 for v2.0)",
+        help="Sampling temperature (default: 0.8 for v2.0/v2.5)",
     )
     generate_parser.add_argument(
         "--top-k",
@@ -690,10 +857,15 @@ def main():
         help="Play audio after generation (macOS/Linux)",
     )
     generate_parser.add_argument(
+        "--stream",
+        action="store_true",
+        help="Yield completed 2.5 text segments and assemble them into --output",
+    )
+    generate_parser.add_argument(
         "--memory-limit",
         type=float,
         default=None,
-        help="GPU memory limit in GB (default: 8 for v1.5, 24 for v2.0)",
+        help="GPU memory limit in GB (default: 24 for v2.0/v2.5)",
     )
     generate_parser.add_argument(
         "--quantize",
@@ -719,25 +891,25 @@ def main():
         "--diffusion-steps",
         type=int,
         default=16,
-        help="[v2.0 only] S2Mel diffusion/CFM sampling steps (default: 16)",
+        help="[v2.0/v2.5] S2Mel diffusion/CFM sampling steps (default: 16)",
     )
     generate_parser.add_argument(
         "--cfg-rate",
         type=float,
         default=0.7,
-        help="[v2.0 only] Classifier-Free Guidance rate (default: 0.7)",
+        help="[v2.0/v2.5] Classifier-Free Guidance rate (default: 0.7)",
     )
     generate_parser.add_argument(
         "--emotion",
         type=str,
         default=None,
-        help="[v2.0 only] Emotion: happy/sad/angry/afraid/disgusted/melancholic/surprised/calm, 'happy:0.8,sad:0.2', or 'auto-qwen'",
+        help="[v2.0/v2.5] Emotion: happy/sad/angry/afraid/disgusted/melancholic/surprised/calm, weighted mix, or auto-qwen",
     )
     generate_parser.add_argument(
         "--emotion-ref-audio",
         type=str,
         default=None,
-        help="[v2.0 only] Separate emotion reference audio or speaker .npz",
+        help="[v2.0/v2.5] Separate emotion reference audio or speaker .npz",
     )
     generate_parser.add_argument(
         "--denoise-ref",
@@ -754,7 +926,19 @@ def main():
     generate_parser.add_argument(
         "--auto-emotion",
         action="store_true",
-        help="[v2.0 only] Use the MLX-native Qwen text emotion model before TTS",
+        help="[v2.0/v2.5] Use the MLX-native Qwen emotion model on the synthesis text",
+    )
+    generate_parser.add_argument(
+        "--emotion-text",
+        type=str,
+        default=None,
+        help="[v2.0/v2.5] Derive emotion from this separate text with Qwen",
+    )
+    generate_parser.add_argument(
+        "--use-random",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Randomly select emotion prototypes (reduces voice-cloning fidelity)",
     )
     generate_parser.add_argument(
         "--qwen-emotion-model",
@@ -772,7 +956,7 @@ def main():
         "--emo-alpha",
         type=float,
         default=0.6,
-        help="[v2.0 only] Emotion intensity 0.0-1.0 (0=reference audio, 1=full specified, default: 0.6)",
+        help="[v2.0/v2.5] Emotion intensity 0.0-1.0 (default: 0.6)",
     )
     generate_parser.add_argument(
         "--speed",
@@ -810,14 +994,14 @@ def main():
         default=None,
         help=(
             "Path to converted MLX model directory. If omitted, uses local 8bit defaults: "
-            f"{DEFAULT_STANDARD_MODEL} or {DEFAULT_VIETNAMESE_MODEL}."
+            f"{DEFAULT_V25_MODEL}, {DEFAULT_STANDARD_MODEL}, or {DEFAULT_VIETNAMESE_MODEL}."
         ),
     )
     speaker_parser.add_argument(
         "--profile",
-        choices=["standard", "vietnamese", "vi"],
-        default="standard",
-        help="Default model profile when --model is omitted (default: standard)",
+        choices=["v25", "2.5", "standard", "vietnamese", "vi"],
+        default="v25",
+        help="Default model profile when --model is omitted (default: v25)",
     )
     speaker_parser.add_argument(
         "--ref-audio",
@@ -856,7 +1040,7 @@ def main():
     batch_parser.add_argument("--model", "-m", default=None, help="Model directory; omitted uses local 8bit defaults")
     batch_parser.add_argument(
         "--profile",
-        choices=["auto", "standard", "vietnamese", "vi"],
+        choices=["auto", "v25", "2.5", "standard", "vietnamese", "vi"],
         default="auto",
         help="Default model profile when --model is omitted (default: auto from batch text)",
     )
@@ -869,6 +1053,22 @@ def main():
     batch_parser.add_argument("--output-dir", "-o", default="outputs/batch", help="Output directory")
     batch_parser.add_argument("--max-tokens", type=int, default=900)
     batch_parser.add_argument("--max-text-tokens", type=int, default=80)
+    batch_parser.add_argument(
+        "--language",
+        choices=["auto", "zh", "en", "ja", "es", "ar"],
+        default="auto",
+    )
+    batch_parser.add_argument(
+        "--text-normalization",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    batch_parser.add_argument("--duration-factor", type=float, default=1.0)
+    batch_parser.add_argument(
+        "--use-gpt-latent",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
     batch_parser.add_argument(
         "--dynamic-max-tokens",
         action=argparse.BooleanOptionalAction,
@@ -909,6 +1109,18 @@ def main():
         help="Denoise emotion reference wavs before generation (default: true)",
     )
     batch_parser.add_argument("--auto-emotion", action="store_true", help="Analyze each row with MLX-native Qwen emotion")
+    batch_parser.add_argument(
+        "--emotion-text",
+        type=str,
+        default=None,
+        help="Use one separate Qwen emotion description for all rows; CSV emotion_text/emo_text overrides it",
+    )
+    batch_parser.add_argument(
+        "--use-random",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Randomly select emotion prototypes",
+    )
     batch_parser.add_argument(
         "--qwen-emotion-model",
         type=str,

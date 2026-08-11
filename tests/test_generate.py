@@ -92,11 +92,60 @@ class TestGenerateComponents:
         assert estimate_mel_tokens_for_duration(2.0, version="1.5") == 90
         assert estimate_mel_tokens_for_duration(0.0, version="2.0") == 5
 
+    def test_v20_accepts_official_eight_value_emotion_vector(self):
+        from mlx_indextts.generate_v2 import normalize_emotion_input
+
+        assert normalize_emotion_input([0.8, 0, 0, 0, 0, 0, 0.1, 0]) == {
+            "happy": 0.8,
+            "angry": 0.0,
+            "sad": 0.0,
+            "afraid": 0.0,
+            "disgusted": 0.0,
+            "melancholic": 0.0,
+            "surprised": 0.1,
+            "calm": 0.0,
+        }
+
     def test_text_token_estimator_caps_short_batch_rows(self):
         from mlx_indextts.runtime import estimate_mel_tokens_for_text
 
         assert estimate_mel_tokens_for_text("你好。", hard_max=900) == 320
         assert estimate_mel_tokens_for_text("这是一个很长的批量生成句子", hard_max=260, tokens_per_char=20) == 260
+
+    def test_duration_budget_does_not_truncate_short_subtitle_content(self):
+        from mlx_indextts.runtime import resolve_mel_token_budget
+
+        # Regression: the old duration-only cap was 103 tokens for this row,
+        # which could stop cross-language generation before EOS and drop words.
+        assert resolve_mel_token_budget(
+            "You can. On your knees.",
+            requested_max=1500,
+            target_duration=2.048,
+            version="2.0",
+        ) == 320
+        assert resolve_mel_token_budget(
+            "A deliberately long subtitle window.",
+            requested_max=1500,
+            target_duration=10.0,
+            version="2.0",
+        ) == 500
+
+    def test_explicit_max_tokens_remains_a_hard_limit(self):
+        from mlx_indextts.runtime import resolve_mel_token_budget
+
+        assert resolve_mel_token_budget(
+            "You can. On your knees.",
+            requested_max=96,
+            target_duration=2.048,
+            version="2.0",
+        ) == 96
+
+    def test_batch_bool_parses_false_string(self):
+        from mlx_indextts.runtime import _batch_bool
+
+        assert _batch_bool("true", False) is True
+        assert _batch_bool("false", True) is False
+        assert _batch_bool("", True) is True
 
     def test_m3max_memory_profile_scales_cache_for_large_unified_memory(self):
         from mlx_indextts.performance import resolve_mlx_memory_limits
