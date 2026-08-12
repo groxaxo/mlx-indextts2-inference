@@ -72,7 +72,7 @@ uv run mlx-indextts convert \
   --dtype float32 --quantize fp32
 ```
 
-Persistent quantization applies to the GPT transformer. EnhancedCodec,
+Persistent 4-, 5-, 6-, and 8-bit quantization applies to the GPT transformer. EnhancedCodec,
 S2Mel/DiT, and BigVGAN retain the selected conversion dtype. Conversion writes
 to a sibling staging directory, verifies strict tensor coverage and component
 loads, writes a manifest/report, and only then publishes the final directory.

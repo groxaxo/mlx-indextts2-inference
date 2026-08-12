@@ -185,8 +185,8 @@ class IndexTTSv25(IndexTTSv2):
             nn.quantize(self.gpt.gpt, bits=bits, group_size=group_size)
         self.gpt.load_weights(str(self.model_dir / "gpt.safetensors"), strict=True)
         if self.quantize_bits and not saved_quantization:
-            if self.quantize_bits not in (4, 8):
-                raise ValueError("quantize_bits must be 4, 8, or None")
+            if self.quantize_bits not in (4, 5, 6, 8):
+                raise ValueError("quantize_bits must be 4, 5, 6, 8, or None")
             nn.quantize(self.gpt.gpt, bits=self.quantize_bits, group_size=64)
 
         codec_cfg = self.cfg.semantic_codec

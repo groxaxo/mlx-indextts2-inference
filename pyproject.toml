@@ -92,6 +92,7 @@ denoise = [
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
+    "requests>=2.31.0",
     "ruff>=0.1.0",
     "torch>=2.10,<2.11",
     "torchaudio>=2.10,<2.11",

@@ -5,6 +5,12 @@ import numpy as np
 import pytest
 
 
+def test_supported_persistent_gpt_quantization_bits_include_requested_variants():
+    from mlx_indextts.convert_v25 import SUPPORTED_GPT_QUANTIZATION_BITS
+
+    assert SUPPORTED_GPT_QUANTIZATION_BITS == frozenset({4, 5, 6, 8})
+
+
 def test_convert_codec_fuses_weight_norm_and_transposes_conv1d():
     from mlx_indextts.convert_v25 import convert_codec_v25_weights
 

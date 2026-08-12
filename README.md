@@ -13,7 +13,7 @@ batch/API/WebUI entrypoints, and persistent quantized conversion.
 - Separate audio, manual eight-value, and Qwen text emotion controls
 - Pinyin, CMU phoneme, and Kana pronunciation annotations
 - Completed-segment streaming, batch generation, FastAPI, and Gradio
-- fp32, fp16, 8-bit, and 4-bit-capable model conversion
+- fp32, fp16, and persistent 4-, 5-, 6-, or 8-bit GPT model conversion
 
 IndexTTS 1.5 files may remain for compatibility, but 1.5 is no longer maintained
 or part of the regression target. See [the complete 2.5 guide](docs/indextts-2.5.md)
@@ -115,6 +115,10 @@ uv run mlx-indextts convert \
 The 2.5 converter also supports full fp16/fp32 and 4-bit GPT output, strict
 tensor coverage, resumable staging, and atomic publication. See the
 [2.5 conversion guide](docs/indextts-2.5.md#download-and-convert).
+
+For persistent 4-, 5-, 6-, and 8-bit GPT variants, benchmark reproduction,
+and the Parakeet WER sanity-check method, see
+[the quantized-model guide](docs/quantized-models.md).
 
 ### 2. Generate Speech
 

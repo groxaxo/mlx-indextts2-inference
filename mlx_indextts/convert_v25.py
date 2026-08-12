@@ -41,6 +41,7 @@ BIGVGAN_WEIGHTS_SHA256 = (
     "e95ba25972d3de0628d99cd156e9315a9c018899bf739988959ebe3544080ced"
 )
 CONVERSION_STATE_FILENAME = ".conversion_state.json"
+SUPPORTED_GPT_QUANTIZATION_BITS = frozenset({4, 5, 6, 8})
 
 
 class WeightMappingError(ValueError):
@@ -423,8 +424,8 @@ def convert_model_v25(
     if detect_source_version(source) != "2.5":
         raise ValueError(f"not an IndexTTS 2.5 source snapshot: {source}")
     _mlx_dtype(dtype)
-    if quantize_bits not in (None, 4, 8):
-        raise ValueError("quantize_bits must be 4, 8, or None")
+    if quantize_bits is not None and quantize_bits not in SUPPORTED_GPT_QUANTIZATION_BITS:
+        raise ValueError("quantize_bits must be 4, 5, 6, 8, or None")
     if group_size <= 0:
         raise ValueError("group_size must be positive")
 
