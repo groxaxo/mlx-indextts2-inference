@@ -8,7 +8,17 @@ import pytest
 def test_supported_persistent_gpt_quantization_bits_include_requested_variants():
     from mlx_indextts.convert_v25 import SUPPORTED_GPT_QUANTIZATION_BITS
 
-    assert SUPPORTED_GPT_QUANTIZATION_BITS == frozenset({4, 5, 6, 8})
+    assert SUPPORTED_GPT_QUANTIZATION_BITS == frozenset({3, 4, 5, 6, 8})
+
+
+def test_mlx_three_bit_group_quantization_round_trip():
+    import mlx.core as mx
+
+    weights = mx.ones((128, 128), dtype=mx.float16)
+    packed, scales, biases = mx.quantize(weights, bits=3, group_size=64)
+    restored = mx.dequantize(packed, scales, biases, bits=3, group_size=64)
+
+    assert restored.shape == weights.shape
 
 
 def test_convert_codec_fuses_weight_norm_and_transposes_conv1d():

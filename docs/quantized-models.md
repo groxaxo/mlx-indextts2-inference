@@ -1,4 +1,4 @@
-# IndexTTS 2.5 MLX 4/5/6-bit variants
+# IndexTTS 2.5 MLX 3/4/5/6-bit variants
 
 These variants persistently quantize the GPT transformer linear layers using
 MLX group quantization (`group_size=64`). EnhancedCodec, S2Mel/DiT, and

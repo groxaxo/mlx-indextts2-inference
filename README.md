@@ -13,7 +13,7 @@ batch/API/WebUI entrypoints, and persistent quantized conversion.
 - Separate audio, manual eight-value, and Qwen text emotion controls
 - Pinyin, CMU phoneme, and Kana pronunciation annotations
 - Completed-segment streaming, batch generation, FastAPI, and Gradio
-- fp32, fp16, and persistent 4-, 5-, 6-, or 8-bit GPT model conversion
+- fp32, fp16, and persistent 3-, 4-, 5-, 6-, or 8-bit GPT model conversion
 
 IndexTTS 1.5 files may remain for compatibility, but 1.5 is no longer maintained
 or part of the regression target. See [the complete 2.5 guide](docs/indextts-2.5.md)
@@ -112,12 +112,12 @@ uv run mlx-indextts convert \
     -o models/mlx-indexTTS-2.0
 ```
 
-The 2.5 converter also supports full fp16/fp32 and persistent 4-, 5-, 6-, or
+The 2.5 converter also supports full fp16/fp32 and persistent 3-, 4-, 5-, 6-, or
 8-bit GPT output, strict
 tensor coverage, resumable staging, and atomic publication. See the
 [2.5 conversion guide](docs/indextts-2.5.md#download-and-convert).
 
-For persistent 4-, 5-, 6-, and 8-bit GPT variants, benchmark reproduction,
+For persistent 3-, 4-, 5-, 6-, and 8-bit GPT variants, benchmark reproduction,
 and the Parakeet WER sanity-check method, see
 [the quantized-model guide](docs/quantized-models.md).
 
@@ -291,7 +291,7 @@ Common options:
   --seed, -s         Random seed for reproducibility
   -v, --verbose      Verbose output
   -p, --play         Play audio after generation
-  --quantize, -q     Runtime quantization: 4, 5, 6, 8, or fp32
+  --quantize, -q     Runtime quantization: 3, 4, 5, 6, 8, or fp32
 
 v2.0 and v2.5:
   --emotion          Emotion: happy/sad/angry/afraid/disgusted/melancholic/surprised/calm/auto-qwen

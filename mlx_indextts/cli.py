@@ -734,7 +734,7 @@ def main():
         "-q",
         type=str,
         default="fp32",
-        help="Quantization bits: 4, 5, 6, 8, or fp32 (GPT only, default: fp32)",
+        help="Quantization bits: 3, 4, 5, 6, 8, or fp32 (GPT only, default: fp32)",
     )
     convert_parser.set_defaults(func=convert_command)
 
@@ -874,7 +874,7 @@ def main():
         "-q",
         type=str,
         default="fp32",
-        help="Runtime quantization (GPT only): 4, 5, 6, 8, or fp32 (default: fp32)",
+        help="Runtime quantization (GPT only): 3, 4, 5, 6, 8, or fp32 (default: fp32)",
     )
     generate_parser.add_argument(
         "--segment-overlap",
