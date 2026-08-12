@@ -112,7 +112,8 @@ uv run mlx-indextts convert \
     -o models/mlx-indexTTS-2.0
 ```
 
-The 2.5 converter also supports full fp16/fp32 and 4-bit GPT output, strict
+The 2.5 converter also supports full fp16/fp32 and persistent 4-, 5-, 6-, or
+8-bit GPT output, strict
 tensor coverage, resumable staging, and atomic publication. See the
 [2.5 conversion guide](docs/indextts-2.5.md#download-and-convert).
 
@@ -290,7 +291,7 @@ Common options:
   --seed, -s         Random seed for reproducibility
   -v, --verbose      Verbose output
   -p, --play         Play audio after generation
-  --quantize, -q     Runtime quantization: 4, 8, or fp32
+  --quantize, -q     Runtime quantization: 4, 5, 6, 8, or fp32
 
 v2.0 and v2.5:
   --emotion          Emotion: happy/sad/angry/afraid/disgusted/melancholic/surprised/calm/auto-qwen
