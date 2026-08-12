@@ -9,6 +9,8 @@ import sys
 import time
 from pathlib import Path
 
+from mlx_indextts.config import default_max_mel_tokens
+
 
 DEFAULT_STANDARD_MODEL = "models/mlx-indexTTS2-standard-8bit"
 DEFAULT_VIETNAMESE_MODEL = "models/mlx-indexTTS2-vietnamese-8bit"
@@ -238,12 +240,12 @@ def generate_command(args):
     else:
         temperature = args.temperature
 
-    # Default max_tokens based on version (use config defaults)
-    # v1.5: 800, v2.0: 1500 (model supports up to 1815)
+    # v1.5: 800, v2.0: 1500, v2.5: 256 by default. Callers can explicitly
+    # raise the cap for long-form work (v2.0 supports up to about 1815).
     if args.max_tokens is not None:
         max_tokens = args.max_tokens
     else:
-        max_tokens = 1500 if version in {"2.0", "2.5"} else 800
+        max_tokens = default_max_mel_tokens(version)
 
     memory_limit = args.memory_limit
 
@@ -805,7 +807,7 @@ def main():
         "--max-tokens",
         type=int,
         default=None,
-        help="Maximum semantic tokens per segment (default: 1500 for v2.0/v2.5)",
+        help="Maximum semantic tokens per segment (default: 256 for v2.5; 1500 for v2.0)",
     )
     generate_parser.add_argument(
         "--max-text-tokens",

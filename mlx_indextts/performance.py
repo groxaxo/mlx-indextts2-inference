@@ -7,6 +7,8 @@ BYTES_PER_GB = 1024 ** 3
 DEFAULT_MEMORY_CAP_GB = 96.0
 DEFAULT_CACHE_CAP_GB = 32.0
 LARGE_UNIFIED_MEMORY_GB = 64.0
+SMALL_UNIFIED_MEMORY_CACHE_FRACTION = 0.10
+SMALL_UNIFIED_MEMORY_CACHE_CAP_GB = 4.0
 
 
 @dataclass(frozen=True)
@@ -81,8 +83,17 @@ def resolve_mlx_memory_limits(
 
     if memory_limit_gb is None and total_gb >= LARGE_UNIFIED_MEMORY_GB:
         memory_limit_gb = min(DEFAULT_MEMORY_CAP_GB, total_gb * 0.75)
-    if cache_limit_gb is None and total_gb >= LARGE_UNIFIED_MEMORY_GB:
-        cache_limit_gb = min(DEFAULT_CACHE_CAP_GB, total_gb * 0.25)
+    if cache_limit_gb is None:
+        if total_gb >= LARGE_UNIFIED_MEMORY_GB:
+            cache_limit_gb = min(DEFAULT_CACHE_CAP_GB, total_gb * 0.25)
+        elif total_gb > 0:
+            # Small unified-memory Macs need an explicit cache bound too:
+            # otherwise MLX can retain stale intermediate tensors after a TTS
+            # request even when a total-memory ceiling is supplied.
+            cache_limit_gb = min(
+                SMALL_UNIFIED_MEMORY_CACHE_CAP_GB,
+                total_gb * SMALL_UNIFIED_MEMORY_CACHE_FRACTION,
+            )
 
     return MlxMemoryLimits(
         memory_limit_gb=_normalize_limit(memory_limit_gb),

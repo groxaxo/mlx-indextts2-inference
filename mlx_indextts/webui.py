@@ -213,7 +213,7 @@ def build_app():
                 "Choose explicit `en` or `es` when Latin-script auto detection is ambiguous."
             )
             with gr.Row():
-                max_tokens = gr.Slider(128, 1500, value=900, step=1, label="Max mel tokens")
+                max_tokens = gr.Slider(128, 1500, value=256, step=1, label="Max mel tokens")
                 max_text_tokens = gr.Slider(40, 180, value=100, step=1, label="Max text tokens")
                 diffusion_steps = gr.Slider(8, 25, value=25, step=1, label="Diffusion steps")
                 seed = gr.Number(value=-1, precision=0, label="Seed (-1 random)")

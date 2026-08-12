@@ -24,6 +24,7 @@ from mlx_indextts.generate_v2 import (
     IndexTTSv2,
     parse_emotion,
 )
+from mlx_indextts.config import DEFAULT_V25_MAX_MEL_TOKENS
 from mlx_indextts.model_manifest import load_manifest
 from mlx_indextts.normalizer_v25 import IndexTTS25TextFrontend
 from mlx_indextts.performance import configure_mlx_runtime, configure_torch_threads
@@ -494,7 +495,7 @@ class IndexTTSv25(IndexTTSv2):
         emo_text: str | None = None,
         emo_alpha: float = 1.0,
         use_random: bool = False,
-        max_mel_tokens: int = 1500,
+        max_mel_tokens: int = DEFAULT_V25_MAX_MEL_TOKENS,
         max_text_tokens_per_segment: int = 120,
         interval_silence: int = 200,
         temperature: float = 0.8,

@@ -286,7 +286,7 @@ Common options:
   -m, --model        Model directory (optional; local 8bit defaults if omitted)
   --profile          auto / v25 / 2.5 / standard / vietnamese / vi
   --language         auto / zh / en / ja / es / ar (2.5)
-  --max-tokens       Max semantic tokens (default: 1500 for v2.0/v2.5)
+  --max-tokens       Max semantic tokens (default: 256 for v2.5; 1500 for v2.0)
   --temperature      Sampling temperature (default: 0.8 for v2.0/v2.5)
   --seed, -s         Random seed for reproducibility
   -v, --verbose      Verbose output

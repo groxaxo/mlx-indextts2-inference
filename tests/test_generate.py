@@ -156,6 +156,17 @@ class TestGenerateComponents:
         assert limits.cache_limit_gb == 32.0
         assert limits.source == "auto"
 
+    def test_small_unified_memory_profile_bounds_mlx_cache(self):
+        from mlx_indextts.performance import resolve_mlx_memory_limits
+
+        limits = resolve_mlx_memory_limits(
+            memory_limit_gb=24,
+            total_memory_bytes=24 * 1024**3,
+        )
+
+        assert limits.memory_limit_gb == 24.0
+        assert limits.cache_limit_gb == 2.4
+
     def test_prepare_inputs_shape(self):
         """Test that input preparation produces correct shapes."""
         from mlx_indextts.config import IndexTTSConfig

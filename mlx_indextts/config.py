@@ -4,6 +4,20 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 
 
+# Keep IndexTTS 2.5 short-form generation bounded by default.  Callers may
+# explicitly raise this per segment for long-form work.
+DEFAULT_V25_MAX_MEL_TOKENS = 256
+
+
+def default_max_mel_tokens(model_version: str) -> int:
+    """Return the conservative per-segment generation cap for a model version."""
+    if model_version == "2.5":
+        return DEFAULT_V25_MAX_MEL_TOKENS
+    if model_version == "2.0":
+        return 1500
+    return 800
+
+
 @dataclass
 class ConformerConfig:
     """Configuration for Conformer encoder."""

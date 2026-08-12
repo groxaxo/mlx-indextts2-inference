@@ -33,6 +33,52 @@ def test_v25_duration_budget_uses_25_semantic_tokens_per_second():
     assert estimate_mel_tokens_for_duration(2.0, version="2.5") == 50
 
 
+def test_v25_default_token_cap_is_256_without_changing_v20():
+    from mlx_indextts.config import default_max_mel_tokens
+
+    assert default_max_mel_tokens("2.5") == 256
+    assert default_max_mel_tokens("2.0") == 1500
+
+
+def test_runtime_generate_uses_v25_default_token_cap(monkeypatch, tmp_path: Path):
+    import mlx_indextts.runtime as runtime_module
+
+    class FakeTTS:
+        model_revision = "revision"
+        last_generation_info = {"resolved_language": "es"}
+        use_gpt_latent = False
+
+        def __init__(self):
+            self.call = None
+
+        def generate(self, **kwargs):
+            self.call = kwargs
+            return np.zeros(2205, dtype=np.float32)
+
+    fake = FakeTTS()
+    monkeypatch.setattr(runtime_module, "detect_mlx_version", lambda _path: "2.5")
+    runtime = runtime_module.TTSRuntime(quantize="fp32")
+    monkeypatch.setattr(runtime, "load", lambda _path: fake)
+    monkeypatch.setattr(
+        runtime,
+        "_resolve_auto_emotion",
+        lambda text, options: (None, {"emotion_source": "speaker_reference"}),
+    )
+
+    runtime.generate(
+        text="hola",
+        ref_audio="speaker.npz",
+        output_path=str(tmp_path / "out.wav"),
+        model="model-v25",
+        options=runtime_module.GenerateOptions(
+            denoise_ref_audio=False,
+            denoise_emotion_ref_audio=False,
+        ),
+    )
+
+    assert fake.call["max_mel_tokens"] == 256
+
+
 def test_runtime_generate_routes_v25_language_and_frontend_options(monkeypatch, tmp_path: Path):
     import mlx_indextts.runtime as runtime_module
 

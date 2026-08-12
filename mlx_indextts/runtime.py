@@ -20,6 +20,7 @@ import numpy as np
 import soundfile as sf
 
 from mlx_indextts.cli import detect_mlx_version, resolve_default_model
+from mlx_indextts.config import default_max_mel_tokens
 from mlx_indextts.performance import configure_mlx_runtime, resolve_mlx_memory_limits
 
 
@@ -382,7 +383,7 @@ class TTSRuntime:
 
         max_tokens = options.max_tokens
         if max_tokens is None:
-            max_tokens = 1500 if version in {"2.0", "2.5"} else 800
+            max_tokens = default_max_mel_tokens(version)
         max_tokens = resolve_mel_token_budget(
             text,
             requested_max=max_tokens,
@@ -580,7 +581,7 @@ class TTSRuntime:
         tts.use_gpt_latent = options.use_gpt_latent
         max_tokens = resolve_mel_token_budget(
             text,
-            requested_max=options.max_tokens or 1500,
+            requested_max=options.max_tokens or default_max_mel_tokens("2.5"),
             target_duration=options.target_duration,
             version="2.5",
         )
@@ -735,9 +736,7 @@ class TTSRuntime:
                 except (TypeError, ValueError):
                     row_options.max_tokens = options.max_tokens
             elif row_options.dynamic_max_tokens and row_options.target_duration is None:
-                hard_max = options.max_tokens or (
-                    1500 if model_version in {"2.0", "2.5"} else 800
-                )
+                hard_max = options.max_tokens or default_max_mel_tokens(model_version)
                 row_options.max_tokens = estimate_mel_tokens_for_text(
                     text,
                     hard_max=hard_max,
