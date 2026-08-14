@@ -1,17 +1,24 @@
-"""Sampling helpers shared by the IndexTTS 2.x GPT runtimes."""
+"""Sampling helpers shared by the IndexTTS GPT runtimes."""
 
 from __future__ import annotations
 
+import threading
+import weakref
+from collections import OrderedDict
 from collections.abc import Sequence
+from dataclasses import dataclass
+from typing import Any
 
 import mlx.core as mx
+
+from mlx_indextts.performance import schedule_mlx_eval
 
 
 class RepetitionPenaltyState(list[int]):
     """List-compatible token history with an incremental device-side seen mask.
 
     IndexTTS generation still needs the ordered Python token list for EOS handling,
-    silence compression, and downstream decoding.  The additional MLX boolean mask
+    silence compression, and downstream decoding. The additional MLX boolean mask
     avoids reconstructing and sorting a Python set on every autoregressive step.
     """
 
@@ -29,6 +36,121 @@ class RepetitionPenaltyState(list[int]):
     def extend(self, tokens: Sequence[int]) -> None:
         for token in tokens:
             self.append(token)
+
+
+@dataclass
+class _CachedHistory:
+    source: list[int]
+    state: RepetitionPenaltyState
+    synced_length: int
+    last_token: int | None
+
+
+class RepetitionStateCache:
+    """Incrementally mirror append-only Python histories into MLX seen masks.
+
+    The legacy v1.5/v2.0 generation loops pass ordinary lists. Keeping a small,
+    bounded cache lets those loops obtain the same O(1)-per-token repetition state
+    as v2.5 without changing their public list contract. Entries retain their list
+    briefly and are evicted in LRU order, so long-lived model servers do not grow
+    unbounded bookkeeping.
+    """
+
+    def __init__(self, vocab_size: int, max_entries: int = 16):
+        self.vocab_size = max(1, int(vocab_size))
+        self.max_entries = max(1, int(max_entries))
+        self._entries: OrderedDict[int, _CachedHistory] = OrderedDict()
+
+    def _new_entry(self, tokens: list[int]) -> _CachedHistory:
+        state = RepetitionPenaltyState(self.vocab_size)
+        state.extend(tokens)
+        return _CachedHistory(
+            source=tokens,
+            state=state,
+            synced_length=len(tokens),
+            last_token=int(tokens[-1]) if tokens else None,
+        )
+
+    def resolve(
+        self,
+        tokens: Sequence[int] | None,
+    ) -> Sequence[int] | None:
+        if tokens is None or isinstance(tokens, RepetitionPenaltyState):
+            return tokens
+        if not isinstance(tokens, list):
+            # Non-list callers are uncommon and not append-tracked. Preserve
+            # semantics with a one-shot state instead of holding their lifetime.
+            state = RepetitionPenaltyState(self.vocab_size)
+            state.extend(tokens)
+            return state
+
+        key = id(tokens)
+        entry = self._entries.get(key)
+        append_only = (
+            entry is not None
+            and entry.source is tokens
+            and len(tokens) >= entry.synced_length
+            and (
+                entry.synced_length == 0
+                or int(tokens[entry.synced_length - 1]) == entry.last_token
+            )
+        )
+        if not append_only:
+            entry = self._new_entry(tokens)
+            self._entries[key] = entry
+        elif len(tokens) > entry.synced_length:
+            entry.state.extend(tokens[entry.synced_length :])
+            entry.synced_length = len(tokens)
+            entry.last_token = int(tokens[-1])
+
+        self._entries.move_to_end(key)
+        while len(self._entries) > self.max_entries:
+            self._entries.popitem(last=False)
+        return entry.state
+
+    def clear(self) -> None:
+        self._entries.clear()
+
+
+_MODEL_HISTORY_CACHES: weakref.WeakKeyDictionary[Any, RepetitionStateCache] = (
+    weakref.WeakKeyDictionary()
+)
+_MODEL_HISTORY_LOCK = threading.Lock()
+
+
+def resolve_repetition_state(
+    owner: Any,
+    generated_tokens: Sequence[int] | None,
+    vocab_size: int,
+) -> Sequence[int] | None:
+    """Return an incremental repetition state for one resident GPT model."""
+    if generated_tokens is None or isinstance(
+        generated_tokens,
+        RepetitionPenaltyState,
+    ):
+        return generated_tokens
+    with _MODEL_HISTORY_LOCK:
+        try:
+            cache = _MODEL_HISTORY_CACHES.get(owner)
+        except TypeError:
+            # Preserve semantics for exotic non-weak-referenceable callers.
+            state = RepetitionPenaltyState(vocab_size)
+            state.extend(generated_tokens)
+            return state
+        if cache is None or cache.vocab_size != int(vocab_size):
+            cache = RepetitionStateCache(vocab_size)
+            try:
+                _MODEL_HISTORY_CACHES[owner] = cache
+            except TypeError:
+                state = RepetitionPenaltyState(vocab_size)
+                state.extend(generated_tokens)
+                return state
+        return cache.resolve(generated_tokens)
+
+
+def schedule_decode_outputs(next_token: mx.array, cache: Any) -> None:
+    """Submit sampled token and KV cache together before host EOS inspection."""
+    schedule_mlx_eval(next_token, cache)
 
 
 def apply_repetition_penalty(
@@ -53,9 +175,6 @@ def apply_repetition_penalty(
         )
         return mx.where(generated_tokens.seen, penalized, logits)
 
-    # The legacy v2.0 loop still supplies a normal list. Duplicate indices are
-    # intentionally retained: they gather identical source logits and scatter
-    # identical penalized values, avoiding the old set construction and sort.
     valid_tokens = [
         int(token)
         for token in generated_tokens

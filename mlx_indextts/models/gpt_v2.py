@@ -11,64 +11,55 @@ from typing import List, Optional, Tuple
 import mlx.core as mx
 import mlx.nn as nn
 
-from mlx_indextts.config import IndexTTSConfig, ConformerConfig
-from mlx_indextts.models.gpt2 import GPT2Model
+from mlx_indextts.config import ConformerConfig, IndexTTSConfig
+from mlx_indextts.models.attention import AttentionBlock, LearnedPositionEmbedding
 from mlx_indextts.models.conformer import ConformerEncoder
+from mlx_indextts.models.gpt2 import GPT2Model
 from mlx_indextts.models.perceiver import PerceiverResampler
-from mlx_indextts.models.attention import LearnedPositionEmbedding, AttentionBlock
 from mlx_indextts.models.sampling import (
     RepetitionPenaltyState,
     apply_repetition_penalty,
+    resolve_repetition_state,
     sample_logits,
+    schedule_decode_outputs,
 )
 
 
 class ConditioningEncoder(nn.Module):
     """Simple conditioning encoder with attention blocks."""
 
-    def __init__(self, spec_dim: int, embedding_dim: int, num_attn_heads: int = 4, num_blocks: int = 6):
+    def __init__(
+        self,
+        spec_dim: int,
+        embedding_dim: int,
+        num_attn_heads: int = 4,
+        num_blocks: int = 6,
+    ):
         super().__init__()
         self.init_conv = nn.Conv1d(spec_dim, embedding_dim, kernel_size=1)
-        self.attn = [AttentionBlock(embedding_dim, num_attn_heads) for _ in range(num_blocks)]
+        self.attn = [
+            AttentionBlock(embedding_dim, num_attn_heads)
+            for _ in range(num_blocks)
+        ]
 
     def __call__(self, x: mx.array) -> mx.array:
-        """Forward pass.
-
-        Args:
-            x: Input mel spectrogram (batch, spec_dim, time) - NCL format
-
-        Returns:
-            Encoded features (batch, embedding_dim, time) - NCL format
-        """
-        x = x.transpose(0, 2, 1)  # NCL -> NLC
+        """Encode NCL conditioning features and return NCL features."""
+        x = x.transpose(0, 2, 1)
         x = self.init_conv(x)
-        x = x.transpose(0, 2, 1)  # NLC -> NCL
+        x = x.transpose(0, 2, 1)
         for attn in self.attn:
             x = attn(x)
         return x
 
 
 class UnifiedVoiceV2(nn.Module):
-    """UnifiedVoice v2 model for IndexTTS 2.0.
-
-    Extends 1.5 with emotion conditioning:
-    - emo_conditioning_encoder: ConformerEncoder for emotion feature extraction
-    - emo_perceiver_encoder: PerceiverResampler with 1 latent for emotion
-    - speed_emb: Speed control embedding
-    - emo_layer, emovec_layer: Emotion projection layers
-    """
+    """UnifiedVoice v2 model for IndexTTS 2.0."""
 
     def __init__(self, config: IndexTTSConfig):
-        """Initialize UnifiedVoice v2.
-
-        Args:
-            config: Model configuration (must have emo_condition_module)
-        """
         super().__init__()
         self.config = config
         gpt_config = config.gpt
 
-        # Store important params
         self.model_dim = gpt_config.model_dim
         self.num_heads = gpt_config.heads
         self.num_layers = gpt_config.layers
@@ -76,7 +67,6 @@ class UnifiedVoiceV2(nn.Module):
         self.max_text_tokens = gpt_config.max_text_tokens
         self.mel_length_compression = gpt_config.mel_length_compression
 
-        # Token config
         self.number_text_tokens = gpt_config.number_text_tokens
         self.number_mel_codes = gpt_config.number_mel_codes
         self.start_text_token = gpt_config.start_text_token
@@ -84,14 +74,11 @@ class UnifiedVoiceV2(nn.Module):
         self.start_mel_token = gpt_config.start_mel_token
         self.stop_mel_token = gpt_config.stop_mel_token
 
-        # Conditioning config
         self.condition_type = gpt_config.condition_type
         self.cond_num = gpt_config.condition_num_latent
 
-        # === Speaker conditioning encoder (same as 1.5) ===
         if gpt_config.condition_type == "conformer_perceiver":
             cond_config = gpt_config.condition_module or ConformerConfig()
-            # Override input_size to 1024 for v2 (W2V-BERT semantic features)
             cond_config_v2 = ConformerConfig(
                 input_size=1024,
                 output_size=cond_config.output_size,
@@ -116,7 +103,9 @@ class UnifiedVoiceV2(nn.Module):
             )
         elif gpt_config.condition_type == "perceiver":
             self.conditioning_encoder = ConditioningEncoder(
-                1024, self.model_dim, num_attn_heads=self.num_heads
+                1024,
+                self.model_dim,
+                num_attn_heads=self.num_heads,
             )
             self.perceiver_encoder = PerceiverResampler(
                 dim=self.model_dim,
@@ -124,16 +113,16 @@ class UnifiedVoiceV2(nn.Module):
             )
         else:
             self.conditioning_encoder = ConditioningEncoder(
-                1024, self.model_dim, num_attn_heads=self.num_heads
+                1024,
+                self.model_dim,
+                num_attn_heads=self.num_heads,
             )
             self.perceiver_encoder = None
 
-        # === Emotion conditioning encoder (NEW in 2.0) ===
         emo_cond_config = gpt_config.emo_condition_module
         if emo_cond_config is None:
             raise ValueError("emo_condition_module is required for UnifiedVoice v2")
 
-        # Override input_size to 1024 for v2 (W2V-BERT semantic features)
         emo_cond_config_v2 = ConformerConfig(
             input_size=1024,
             output_size=emo_cond_config.output_size,
@@ -150,35 +139,41 @@ class UnifiedVoiceV2(nn.Module):
         )
         self.emo_conditioning_encoder = ConformerEncoder(emo_cond_config_v2)
         self.emo_perceiver_encoder = PerceiverResampler(
-            dim=1024,  # Output dim is 1024 (matches emovec_layer input)
+            dim=1024,
             n_dim_context=emo_cond_config.output_size,
-            n_latents=1,  # Single emotion latent
+            n_latents=1,
             n_heads=emo_cond_config.attention_heads,
             n_ff_mult=emo_cond_config.perceiver_mult,
         )
 
-        # Emotion projection layers
         self.emo_layer = nn.Linear(self.model_dim, self.model_dim)
         self.emovec_layer = nn.Linear(1024, self.model_dim)
-
-        # Speed embedding (2 speeds: normal=0, half=1)
         self.speed_emb = nn.Embedding(2, self.model_dim)
 
-        # Embeddings
-        self.text_embedding = nn.Embedding(self.number_text_tokens + 1, self.model_dim)
-        self.mel_embedding = nn.Embedding(self.number_mel_codes, self.model_dim)
+        self.text_embedding = nn.Embedding(
+            self.number_text_tokens + 1,
+            self.model_dim,
+        )
+        self.mel_embedding = nn.Embedding(
+            self.number_mel_codes,
+            self.model_dim,
+        )
 
-        # Position embeddings
         self.mel_pos_embedding = LearnedPositionEmbedding(
-            self.max_mel_tokens + 2 + 1, self.model_dim
+            self.max_mel_tokens + 3,
+            self.model_dim,
         )
         self.text_pos_embedding = LearnedPositionEmbedding(
-            self.max_text_tokens + 2, self.model_dim
+            self.max_text_tokens + 2,
+            self.model_dim,
         )
 
-        # GPT backbone
-        # v2 has additional conditioning tokens: cond_num + 2 (speed embeddings)
-        max_seq_len = self.max_mel_tokens + self.max_text_tokens + self.cond_num + 6
+        max_seq_len = (
+            self.max_mel_tokens
+            + self.max_text_tokens
+            + self.cond_num
+            + 6
+        )
         self.gpt = GPT2Model(
             dim=self.model_dim,
             num_heads=self.num_heads,
@@ -186,10 +181,15 @@ class UnifiedVoiceV2(nn.Module):
             max_seq_len=max_seq_len,
         )
 
-        # Output heads
         self.final_norm = nn.LayerNorm(self.model_dim)
-        self.text_head = nn.Linear(self.model_dim, self.number_text_tokens + 1)
-        self.mel_head = nn.Linear(self.model_dim, self.number_mel_codes)
+        self.text_head = nn.Linear(
+            self.model_dim,
+            self.number_text_tokens + 1,
+        )
+        self.mel_head = nn.Linear(
+            self.model_dim,
+            self.number_mel_codes,
+        )
 
     def new_repetition_state(self) -> RepetitionPenaltyState:
         """Create list-compatible token history with an incremental seen mask."""
@@ -200,72 +200,39 @@ class UnifiedVoiceV2(nn.Module):
         speech_conditioning_input: mx.array,
         cond_mel_lengths: Optional[mx.array] = None,
     ) -> mx.array:
-        """Extract speaker conditioning from reference audio.
-
-        Args:
-            speech_conditioning_input: Semantic features (batch, 1024, time) - NCL format
-            cond_mel_lengths: Optional mel lengths
-
-        Returns:
-            Conditioning latents (batch, cond_num, model_dim)
-        """
+        """Extract speaker conditioning from semantic reference features."""
         if self.condition_type == "conformer_perceiver":
-            # Transpose NCL -> NLC for Conformer
             x = speech_conditioning_input.transpose(0, 2, 1)
-            x, mask = self.conditioning_encoder(x, cond_mel_lengths)
-            conds = self.perceiver_encoder(x)
-        elif self.condition_type == "perceiver":
-            # ConditioningEncoder expects NCL format
+            x, _ = self.conditioning_encoder(x, cond_mel_lengths)
+            return self.perceiver_encoder(x)
+        if self.condition_type == "perceiver":
             x = self.conditioning_encoder(speech_conditioning_input)
-            x = x.transpose(0, 2, 1)  # NCL -> NLC for Perceiver
-            conds = self.perceiver_encoder(x)
-        else:
-            x = self.conditioning_encoder(speech_conditioning_input)
-            conds = x.mean(axis=-1, keepdims=True)
-            conds = conds.transpose(0, 2, 1)
+            return self.perceiver_encoder(x.transpose(0, 2, 1))
 
-        return conds
+        x = self.conditioning_encoder(speech_conditioning_input)
+        return x.mean(axis=-1, keepdims=True).transpose(0, 2, 1)
 
     def get_emo_conditioning(
         self,
         emo_conditioning_input: mx.array,
         emo_cond_lengths: Optional[mx.array] = None,
     ) -> mx.array:
-        """Extract emotion conditioning from reference audio.
-
-        Args:
-            emo_conditioning_input: Semantic features (batch, 1024, time) - NCL format
-            emo_cond_lengths: Optional mel lengths
-
-        Returns:
-            Emotion vector (batch, 1024)
-        """
-        # Transpose NCL -> NLC for Conformer
+        """Extract one emotion latent from semantic reference features."""
         x = emo_conditioning_input.transpose(0, 2, 1)
-        x, mask = self.emo_conditioning_encoder(x, emo_cond_lengths)
-        # Perceiver outputs (batch, 1, 1024)
-        conds = self.emo_perceiver_encoder(x)
-        # Squeeze to (batch, 1024)
-        return conds.squeeze(1)
+        x, _ = self.emo_conditioning_encoder(x, emo_cond_lengths)
+        return self.emo_perceiver_encoder(x).squeeze(1)
 
     def get_emovec(
         self,
         emo_conditioning_input: mx.array,
         emo_cond_lengths: Optional[mx.array] = None,
     ) -> mx.array:
-        """Get emotion vector for conditioning.
-
-        Args:
-            emo_conditioning_input: Semantic features (batch, 1024, time) - NCL format
-            emo_cond_lengths: Optional lengths
-
-        Returns:
-            Emotion vector (batch, model_dim)
-        """
-        emo_vec_raw = self.get_emo_conditioning(emo_conditioning_input, emo_cond_lengths)
-        emo_vec = self.emovec_layer(emo_vec_raw)
-        emo_vec = self.emo_layer(emo_vec)
-        return emo_vec
+        """Project the reference emotion latent into GPT model space."""
+        emo_vec_raw = self.get_emo_conditioning(
+            emo_conditioning_input,
+            emo_cond_lengths,
+        )
+        return self.emo_layer(self.emovec_layer(emo_vec_raw))
 
     def merge_emovec(
         self,
@@ -275,13 +242,15 @@ class UnifiedVoiceV2(nn.Module):
         emo_cond_lengths: Optional[mx.array] = None,
         alpha: float = 1.0,
     ) -> mx.array:
-        """Blend speaker-reference and emotion-reference emotion vectors.
-
-        Mirrors the official PyTorch IndexTTS2 formula:
-        base_vec + alpha * (emo_vec - base_vec).
-        """
-        base_vec = self.get_emovec(speech_conditioning_input, cond_lengths)
-        emo_vec = self.get_emovec(emo_conditioning_input, emo_cond_lengths)
+        """Blend speaker and emotion reference vectors."""
+        base_vec = self.get_emovec(
+            speech_conditioning_input,
+            cond_lengths,
+        )
+        emo_vec = self.get_emovec(
+            emo_conditioning_input,
+            emo_cond_lengths,
+        )
         return base_vec + alpha * (emo_vec - base_vec)
 
     def prepare_conditioning_latents(
@@ -290,66 +259,43 @@ class UnifiedVoiceV2(nn.Module):
         emo_vec: mx.array,
         batch_size: int,
     ) -> mx.array:
-        """Prepare full conditioning latents including emotion and speed.
-
-        Args:
-            speech_conditioning: Speaker conditioning (batch, cond_num, model_dim)
-            emo_vec: Emotion vector (batch, model_dim)
-            batch_size: Batch size
-
-        Returns:
-            Full conditioning (batch, cond_num + 2, model_dim)
-        """
-        # Add emotion to speaker conditioning
-        # speech_conditioning: (batch, cond_num, model_dim)
-        # emo_vec: (batch, model_dim) -> need to expand to (batch, cond_num, model_dim)
+        """Prepare speaker, emotion, and speed conditioning tokens."""
         conds_with_emo = speech_conditioning + emo_vec[:, None, :]
-
-        # Speed embeddings
-        # duration_emb = speed_emb(0) for normal speed
-        # duration_emb_half = speed_emb(1) for half speed
         zeros = mx.zeros((batch_size,), dtype=mx.int32)
         ones = mx.ones((batch_size,), dtype=mx.int32)
-        duration_emb = self.speed_emb(zeros)[:, None, :]  # (batch, 1, model_dim)
-        duration_emb_half = self.speed_emb(ones)[:, None, :]  # (batch, 1, model_dim)
-
-        # Concatenate: [conds_with_emo, duration_emb_half, duration_emb]
-        conds = mx.concatenate([conds_with_emo, duration_emb_half, duration_emb], axis=1)
-
-        return conds
+        duration_emb = self.speed_emb(zeros)[:, None, :]
+        duration_emb_half = self.speed_emb(ones)[:, None, :]
+        return mx.concatenate(
+            [conds_with_emo, duration_emb_half, duration_emb],
+            axis=1,
+        )
 
     def prepare_inputs(
         self,
         conditioning: mx.array,
         text_tokens: mx.array,
     ) -> Tuple[mx.array, mx.array]:
-        """Prepare inputs for generation.
+        """Prepare conditioning and text embeddings for semantic generation."""
+        batch_size = text_tokens.shape[0]
+        start_tokens = mx.full(
+            (batch_size, 1),
+            self.start_text_token,
+            dtype=mx.int32,
+        )
+        stop_tokens = mx.full(
+            (batch_size, 1),
+            self.stop_text_token,
+            dtype=mx.int32,
+        )
+        text_tokens = mx.concatenate(
+            [start_tokens, text_tokens, stop_tokens],
+            axis=1,
+        )
 
-        Args:
-            conditioning: Full conditioning latents (batch, cond_num + 2, dim)
-            text_tokens: Text token IDs (batch, text_len)
-
-        Returns:
-            Tuple of (input_embeddings, attention_mask)
-        """
-        batch_size, text_len = text_tokens.shape
-
-        # Add start/stop tokens to text
-        start_tokens = mx.full((batch_size, 1), self.start_text_token, dtype=mx.int32)
-        stop_tokens = mx.full((batch_size, 1), self.stop_text_token, dtype=mx.int32)
-        text_tokens = mx.concatenate([start_tokens, text_tokens, stop_tokens], axis=1)
-
-        # Get text embeddings with position
         text_emb = self.text_embedding(text_tokens)
         text_emb = text_emb + self.text_pos_embedding(text_emb)
-
-        # Concatenate conditioning and text
         emb = mx.concatenate([conditioning, text_emb], axis=1)
-
-        # Create attention mask (all ones)
-        seq_len = emb.shape[1]
-        mask = mx.ones((batch_size, seq_len))
-
+        mask = mx.ones((batch_size, emb.shape[1]))
         return emb, mask
 
     def generate_step(
@@ -362,33 +308,19 @@ class UnifiedVoiceV2(nn.Module):
         repetition_penalty: float = 1.0,
         generated_tokens: Optional[List[int]] = None,
     ) -> Tuple[mx.array, mx.array, List[Tuple[mx.array, mx.array]]]:
-        """Generate one mel token.
-
-        Args:
-            input_emb: Input embeddings (batch, seq_len, dim)
-            cache: KV cache
-            temperature: Sampling temperature
-            top_k: Top-k sampling
-            top_p: Top-p (nucleus) sampling
-            repetition_penalty: Penalty for repeating tokens (1.0 = no penalty)
-            generated_tokens: List of previously generated token IDs for repetition penalty
-
-        Returns:
-            Tuple of (next_token, logits, updated_cache)
-        """
-        # Forward through GPT
+        """Generate one semantic token and schedule token/cache together."""
         hidden, new_cache = self.gpt(input_emb, cache=cache)
-
-        # Get logits for last position
         hidden = self.final_norm(hidden[:, -1:, :])
         logits = self.mel_head(hidden)
-
-        # Sample
         next_token = self._sample(
-            logits[:, 0, :], temperature, top_k, top_p,
-            repetition_penalty, generated_tokens
+            logits[:, 0, :],
+            temperature,
+            top_k,
+            top_p,
+            repetition_penalty,
+            generated_tokens,
         )
-
+        schedule_decode_outputs(next_token, new_cache)
         return next_token, logits, new_cache
 
     def _apply_repetition_penalty(
@@ -398,7 +330,12 @@ class UnifiedVoiceV2(nn.Module):
         penalty: float,
     ) -> mx.array:
         """Apply a sign-aware penalty to tokens already generated."""
-        return apply_repetition_penalty(logits, generated_tokens, penalty)
+        history = resolve_repetition_state(
+            self,
+            generated_tokens,
+            self.number_mel_codes,
+        )
+        return apply_repetition_penalty(logits, history, penalty)
 
     def _sample(
         self,
@@ -409,14 +346,19 @@ class UnifiedVoiceV2(nn.Module):
         repetition_penalty: float = 1.0,
         generated_tokens: Optional[List[int]] = None,
     ) -> mx.array:
-        """Sample from logits using bounded top-k/top-p candidate work."""
+        """Sample with bounded candidates and incremental repetition state."""
+        history = resolve_repetition_state(
+            self,
+            generated_tokens,
+            self.number_mel_codes,
+        )
         return sample_logits(
             logits,
             temperature=temperature,
             top_k=top_k,
             top_p=top_p,
             repetition_penalty=repetition_penalty,
-            generated_tokens=generated_tokens,
+            generated_tokens=history,
         )
 
     def forward_latent(
@@ -425,52 +367,52 @@ class UnifiedVoiceV2(nn.Module):
         text_tokens: mx.array,
         mel_codes: mx.array,
     ) -> mx.array:
-        """Forward pass to get latents for S2Mel.
-
-        This is used after generation to get the final latent
-        representations for the S2Mel diffusion model.
-
-        Args:
-            conditioning: Full conditioning (batch, cond_num + 2, dim)
-            text_tokens: Text tokens (batch, text_len)
-            mel_codes: Generated mel codes (batch, mel_len)
-
-        Returns:
-            Latent features (batch, mel_len, dim)
-        """
+        """Return GPT latents aligned to generated semantic codes."""
         batch_size = text_tokens.shape[0]
         mel_len = mel_codes.shape[1]
 
-        # Prepare text: [start, text..., stop]
-        start_tokens = mx.full((batch_size, 1), self.start_text_token, dtype=mx.int32)
-        stop_tokens = mx.full((batch_size, 1), self.stop_text_token, dtype=mx.int32)
-        text_tokens = mx.concatenate([start_tokens, text_tokens, stop_tokens], axis=1)
-
-        # Text embeddings
+        start_tokens = mx.full(
+            (batch_size, 1),
+            self.start_text_token,
+            dtype=mx.int32,
+        )
+        stop_tokens = mx.full(
+            (batch_size, 1),
+            self.stop_text_token,
+            dtype=mx.int32,
+        )
+        text_tokens = mx.concatenate(
+            [start_tokens, text_tokens, stop_tokens],
+            axis=1,
+        )
         text_emb = self.text_embedding(text_tokens)
         text_emb = text_emb + self.text_pos_embedding(text_emb)
 
-        # Prepare mel: [start, mel..., stop]
-        mel_start = mx.full((batch_size, 1), self.start_mel_token, dtype=mx.int32)
-        mel_stop = mx.full((batch_size, 1), self.stop_mel_token, dtype=mx.int32)
-        mel_tokens = mx.concatenate([mel_start, mel_codes, mel_stop], axis=1)
-
-        # Mel embeddings
+        mel_start = mx.full(
+            (batch_size, 1),
+            self.start_mel_token,
+            dtype=mx.int32,
+        )
+        mel_stop = mx.full(
+            (batch_size, 1),
+            self.stop_mel_token,
+            dtype=mx.int32,
+        )
+        mel_tokens = mx.concatenate(
+            [mel_start, mel_codes, mel_stop],
+            axis=1,
+        )
         mel_emb = self.mel_embedding(mel_tokens)
         mel_emb = mel_emb + self.mel_pos_embedding(mel_emb)
 
-        # Concatenate all: [conditioning, text_emb, mel_emb]
         emb = mx.concatenate([conditioning, text_emb, mel_emb], axis=1)
-
-        # Forward through GPT
         hidden, _ = self.gpt(emb)
 
-        # Apply final norm to non-conditioning part
         cond_len = conditioning.shape[1]
         enc = self.final_norm(hidden[:, cond_len:, :])
-
-        # Extract mel latents
-        text_len_with_tokens = text_emb.shape[1]  # text_len + 2
-        mel_latent = enc[:, text_len_with_tokens:text_len_with_tokens + mel_len, :]
-
-        return mel_latent
+        text_len_with_tokens = text_emb.shape[1]
+        return enc[
+            :,
+            text_len_with_tokens : text_len_with_tokens + mel_len,
+            :,
+        ]

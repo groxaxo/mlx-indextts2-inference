@@ -1,107 +1,150 @@
 # Inference Performance Bottleneck Audit
 
-This note records the performance audit started against `main` at
-`0b28a63e745d4290ed57d260a4f0b50cb4e01846` on 2026-08-14 and the fixes now
-landed on `main`.
+This audit started against `main` at
+`0b28a63e745d4290ed57d260a4f0b50cb4e01846` on 2026-08-14. The sections below
+track the fixes subsequently landed on `main` and the boundary of the remaining
+architectural work.
 
 ## Completed work
 
-### P0 — GPT KV-cache growth — fixed
+### P0 — GPT KV-cache growth
 
 `GPT2Attention` previously appended every new key/value tensor with
-`mx.concatenate()` at every layer and every autoregressive token. For a generated
-sequence of length `T`, that repeatedly copied the historical cache and turned
-cache maintenance into quadratic memory traffic.
+`mx.concatenate()` at every layer and autoregressive token. The runtime now keeps
+a chunked cache, grows capacity only when a chunk is exhausted, and writes new
+K/V slices into allocated arrays. The historical `cache[layer][0/1]` contract is
+preserved.
 
-The runtime now keeps a chunked cache, grows capacity only when a chunk is
-exhausted, and writes new K/V slices into allocated MLX arrays. The public
-`cache[layer][0/1]` indexing contract is preserved for compatibility.
+GPT attention also uses `mx.fast.scaled_dot_product_attention` when available,
+with the explicit matmul/softmax implementation retained as a compatibility
+fallback.
 
-The GPT attention path also uses `mx.fast.scaled_dot_product_attention` when the
-installed MLX exposes it, with the explicit matmul/softmax implementation retained
-as a compatibility fallback.
+### P1 — Full-vocabulary nucleus work after top-k
 
-### P1 — Full-vocabulary nucleus work after top-k — fixed
+Sampling now uses `mx.argpartition` to gather only the top-k candidates before
+top-p sorting. With the default `top_k=30`, nucleus sorting operates on 30 values
+rather than the complete semantic vocabulary.
 
-The previous sampler applied top-k and then performed a full-vocabulary `argsort`
-for nucleus sampling on every token. The new shared sampler selects candidates with
-`mx.argpartition`, gathers only the top-k candidate logits, and performs top-p
-sorting over that bounded set. With the default `top_k=30`, nucleus sorting is now
-bounded to 30 values rather than the complete semantic vocabulary.
+The redundant final `softmax()` followed by `log()` was also removed because MLX
+categorical sampling accepts unnormalized logits.
 
-The old final `softmax()` followed by `log()` was also removed. MLX categorical
-sampling consumes unnormalized logits directly. Token IDs are mapped back from the
-candidate set after sampling, so the public result remains a vocabulary ID.
+### P1 — Repetition-history reconstruction
 
-### P1 — Repetition-history reconstruction — fixed for v2.5, reduced for v2.0
+IndexTTS 2.5 already used a list-compatible `RepetitionPenaltyState` with an
+incremental MLX seen-token mask. The legacy v1.5/v2.0 list contract is now mirrored
+through a bounded append-only state cache, so all GPT runtimes avoid rebuilding and
+sorting the complete Python history on each token.
 
-The previous repetition penalty rebuilt and sorted a Python `set` from the entire
-generated-token history on every autoregressive step.
+The cache is model-scoped through weak references and bounded LRU entries. It does
+not add arrays to the model parameter tree or retain unbounded request history.
 
-IndexTTS 2.5 now uses a list-compatible `RepetitionPenaltyState` with an incremental
-MLX boolean seen-token mask. It preserves the ordered Python list needed by the
-rest of the pipeline while eliminating per-token set construction and sorting.
-The v2.0 compatibility path no longer creates or sorts a set, although it still
-receives the existing Python history list from the legacy generation loop.
+### P1 — Decode token/cache materialization
 
-### P1 — IndexTTS 2.5 attention-mask growth — fixed
+Each GPT decode step now submits the sampled token and KV-cache tree together with
+`mx.async_eval` when supported. The caller still performs one scalar EOS inspection,
+but the cache is materialized in the same graph submission instead of requiring a
+separate evaluation path. `MLX_INDEXTTS_ASYNC_EVAL=0` restores blocking evaluation.
 
-`IndexTTSv25._generate_semantic_codes()` previously appended one element to its
-attention mask with `mx.concatenate()` after every generated token. It now allocates
-the maximum generation mask once and passes an active prefix view for each key
-length. This removes repeated allocation and graph construction from the decode
-loop.
+IndexTTS 2.5 also special-cases the normal one-query cached attention mask. Causality
+adds no exclusions when the only query is the final key position, so the runtime
+returns the broadcastable padding mask directly rather than constructing per-token
+position arrays and comparisons.
 
-### P1 — IndexTTS 2.5 safe compile hook — fixed
+### P1 — IndexTTS 2.5 mask growth and compile parity
 
-IndexTTS 2.5 now invokes the same best-effort `_compile_hotpaths()` policy already
-used by v2.0 after loading S2Mel and BigVGAN. Unsupported MLX versions still fall
-back to eager execution. Benchmark cold compile latency separately from warm
-inference because the first resident request may include compilation.
+The 2.5 semantic decoder allocates its maximum generation mask once and passes an
+active prefix for each key length instead of concatenating a new mask element after
+every token.
 
-## Remaining bottlenecks
+IndexTTS 2.5 also invokes the same best-effort S2Mel projection and BigVGAN compile
+policy used by v2.0.
 
-### P2 — Per-token host synchronization
+### P1 — S2Mel attention and diffusion loop
 
-Both v2.0 and v2.5 materialize the sampled token through `.item()` for EOS handling.
-That synchronizes the host once per generated semantic token. Eliminating this
-requires a larger device-side generation-loop design so EOS, position updates, and
-history bookkeeping can remain on-device.
+S2Mel DiT now uses fused scaled-dot-product attention when supported and keeps its
+valid-key mask in broadcastable `(B, 1, 1, T)` form rather than materializing an
+`(B, 1, T, T)` matrix on every diffusion step.
 
-### P2 — CFM per-step allocations
+CFM now:
 
-The CFM path already hoists invariant CFG tensors. It still creates `stacked_x`,
-timestep arrays, and prompt-zeroed tensors inside the Euler loop and forces
-`mx.eval(x)` every step. Revisit this after measuring the new GPT decode profile.
+- lazily compiles the DiT estimator, with shapeless and eager fallbacks;
+- uses broadcast/reshape views for duplicated CFG state;
+- hoists prompt, style, content, and length invariants;
+- uses a broadcast state mask instead of rebuilding the zero prompt prefix;
+- submits Euler states asynchronously to bound the lazy graph without a host
+  barrier after every step.
 
-### P2 — Raw reference-audio preprocessing
+Set `MLX_INDEXTTS_COMPILE_CFM=0` to disable estimator compilation.
 
-Raw WAV references cross librosa/PyTorch/torchaudio and MLX boundaries. The speaker
-`.npz` cache is the production fast path for repeated voices and avoids repeating
-W2V-BERT, CAMPPlus, resampling, and tensor-bridge work.
+### P1 — BigVGAN layout churn
+
+BigVGAN previously moved between NCL and NLC around virtually every convolution
+inside every residual block and anti-aliased activation. Its public input/output
+contract remains NCL, but the full internal vocoder hot path now stays NLC, matching
+MLX convolution kernels. Only the initial mel input and final waveform output are
+transposed.
+
+Snake/SnakeBeta also replace generic `power(x, 2)` calls with direct multiplication,
+and the anti-alias up/down samplers support either NCL or NLC while preserving the
+existing parameter names and generated Kaiser filters.
+
+### P2 — Reference-audio preprocessing
+
+Raw WAV references still cross librosa, PyTorch/torchaudio, and MLX while extracting
+W2V-BERT, CAMPPlus, mel, and prompt features. Repeated voices should use the existing
+speaker `.npz` cache. Within one resident runtime, canonical reference features and
+their evaluated MLX forms are already reused.
+
+Automatically persisting every arbitrary raw reference is deliberately not enabled:
+API uploads may be temporary or sensitive, and an implicit disk cache would require
+an explicit retention, location, invalidation, and privacy contract.
+
+## Remaining architectural boundary
+
+### One scalar EOS synchronization per semantic token
+
+Autoregressive generation still needs to inspect the sampled token to stop exactly
+at EOS. The runtime now co-submits token and cache, so any subsequent cache check
+reuses that materialization. Fully removing the scalar synchronization requires moving
+the entire variable-length generation loop—including EOS control flow, position
+updates, and repetition state—into a device-side loop primitive.
+
+Generating a fixed `max_mel_tokens` sequence and trimming after EOS was rejected:
+it wastes the largest part of inference for short utterances and changes runtime
+behavior under memory limits.
 
 ## Validation
 
-Run focused regression and lint checks on Apple Silicon:
+Run the focused suite on an MLX-capable host:
 
 ```bash
 uv run pytest \
   tests/test_gpt2_cache_perf.py \
   tests/test_sampling_perf.py \
+  tests/test_s2mel_perf.py \
+  tests/test_remaining_perf.py \
+  tests/test_gpt_v25.py \
   tests/test_generate_v25.py \
   tests/test_models.py \
   -q
-
-uv run ruff check \
-  mlx_indextts/models/gpt2.py \
-  mlx_indextts/models/gpt_v2.py \
-  mlx_indextts/models/sampling.py \
-  mlx_indextts/generate_v25.py \
-  tests/test_gpt2_cache_perf.py \
-  tests/test_sampling_perf.py
 ```
 
-Run the resident-model benchmark before and after the optimization commits:
+Run local lint without relying on remote automation:
+
+```bash
+uv run ruff check \
+  mlx_indextts/performance.py \
+  mlx_indextts/models/sampling.py \
+  mlx_indextts/models/gpt.py \
+  mlx_indextts/models/gpt_v2.py \
+  mlx_indextts/models/gpt_v25.py \
+  mlx_indextts/models/s2mel/cfm.py \
+  mlx_indextts/models/activations.py \
+  mlx_indextts/models/bigvgan_v2.py \
+  tests/test_remaining_perf.py
+```
+
+Benchmark cold load, first-resident inference, and warm inference separately:
 
 ```bash
 uv run python scripts/benchmark_v20_v25.py \
@@ -109,13 +152,11 @@ uv run python scripts/benchmark_v20_v25.py \
   --output-dir outputs/validation/v20-v25-benchmark
 ```
 
-For detailed phase timing on v2.0, use:
+For v2.0 phase timing:
 
 ```bash
 uv run python scripts/test_benchmark.py --v20-only --mlx-only
 ```
 
-Record cold load, first-resident inference, warm RTF, GPT generation time, S2Mel
-time, and BigVGAN time separately. The KV-cache improvement should scale with
-semantic-token count; the sampling improvement should be visible as lower per-token
-host and vocabulary-processing overhead.
+Record GPT generation, S2Mel, BigVGAN, total wall time, audio duration, and RTF.
+Warm results are the relevant comparison for compiled CFM and BigVGAN paths.

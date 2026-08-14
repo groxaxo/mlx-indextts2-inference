@@ -1,46 +1,48 @@
 """Activation functions for IndexTTS."""
 
+from __future__ import annotations
+
 import math
 import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
 
 
-def kaiser_sinc_filter1d(cutoff: float, half_width: float, kernel_size: int) -> np.ndarray:
-    """Create Kaiser-windowed sinc filter (matching PyTorch implementation).
-
-    Args:
-        cutoff: Cutoff frequency (0-0.5)
-        half_width: Transition band half-width
-        kernel_size: Filter kernel size
-
-    Returns:
-        Filter of shape (1, 1, kernel_size)
-    """
-    even = (kernel_size % 2 == 0)
+def kaiser_sinc_filter1d(
+    cutoff: float,
+    half_width: float,
+    kernel_size: int,
+) -> np.ndarray:
+    """Create a Kaiser-windowed sinc low-pass filter."""
+    even = kernel_size % 2 == 0
     half_size = kernel_size // 2
 
-    # Kaiser window beta calculation
     delta_f = 4 * half_width
-    A = 2.285 * (half_size - 1) * math.pi * delta_f + 7.95
-    if A > 50.:
-        beta = 0.1102 * (A - 8.7)
-    elif A >= 21.:
-        beta = 0.5842 * (A - 21) ** 0.4 + 0.07886 * (A - 21.)
+    attenuation = (
+        2.285 * (half_size - 1) * math.pi * delta_f + 7.95
+    )
+    if attenuation > 50.0:
+        beta = 0.1102 * (attenuation - 8.7)
+    elif attenuation >= 21.0:
+        beta = (
+            0.5842 * (attenuation - 21) ** 0.4
+            + 0.07886 * (attenuation - 21.0)
+        )
     else:
-        beta = 0.
+        beta = 0.0
 
     window = np.kaiser(kernel_size, beta)
-
-    # Time array
     if even:
         time = np.arange(-half_size, half_size) + 0.5
     else:
         time = np.arange(kernel_size) - half_size
 
-    # Sinc function: sin(pi*x) / (pi*x)
-    def sinc(x):
-        return np.where(x == 0, 1.0, np.sin(np.pi * x) / (np.pi * x))
+    def sinc(value):
+        return np.where(
+            value == 0,
+            1.0,
+            np.sin(np.pi * value) / (np.pi * value),
+        )
 
     if cutoff == 0:
         filter_ = np.zeros_like(time)
@@ -51,47 +53,56 @@ def kaiser_sinc_filter1d(cutoff: float, half_width: float, kernel_size: int) -> 
     return filter_.reshape(1, 1, kernel_size).astype(np.float32)
 
 
+def _normalized_axis(axis: int, ndim: int) -> int:
+    normalized = axis if axis >= 0 else ndim + axis
+    if normalized <= 0 or normalized >= ndim:
+        raise ValueError("channel_axis must select a non-batch tensor dimension")
+    return normalized
+
+
 class Snake(nn.Module):
-    """Snake activation function.
+    """Periodic Snake activation supporting NCL and NLC layouts."""
 
-    Snake(x) = x + (1/a) * sin^2(a*x)
-
-    This is a periodic activation function that helps with audio generation.
-    Expects input in NCL format (batch, channels, length).
-    """
-
-    def __init__(self, channels: int, alpha_logscale: bool = True):
+    def __init__(
+        self,
+        channels: int,
+        alpha_logscale: bool = True,
+        channel_axis: int = 1,
+    ):
         super().__init__()
         self.channels = channels
         self.alpha_logscale = alpha_logscale
-
-        if alpha_logscale:
-            self.alpha = mx.zeros((channels,))
-        else:
-            self.alpha = mx.ones((channels,))
+        self.channel_axis = channel_axis
+        self.alpha = (
+            mx.zeros((channels,))
+            if alpha_logscale
+            else mx.ones((channels,))
+        )
 
     def __call__(self, x: mx.array) -> mx.array:
-        # Reshape alpha to broadcast: (channels,) -> (1, channels, 1)
-        alpha = self.alpha[None, :, None]
-
+        axis = _normalized_axis(self.channel_axis, x.ndim)
+        shape = [1] * x.ndim
+        shape[axis] = self.channels
+        alpha = self.alpha.reshape(shape)
         if self.alpha_logscale:
             alpha = mx.exp(alpha)
-
-        return x + (1.0 / (alpha + 1e-9)) * mx.power(mx.sin(alpha * x), 2)
+        sine = mx.sin(alpha * x)
+        return x + (sine * sine) / (alpha + 1e-9)
 
 
 class SnakeBeta(nn.Module):
-    """Snake Beta activation function.
+    """Periodic SnakeBeta activation supporting NCL and NLC layouts."""
 
-    SnakeBeta(x) = x + (1/b) * sin^2(a*x)
-    Expects input in NCL format (batch, channels, length).
-    """
-
-    def __init__(self, channels: int, alpha_logscale: bool = True):
+    def __init__(
+        self,
+        channels: int,
+        alpha_logscale: bool = True,
+        channel_axis: int = 1,
+    ):
         super().__init__()
         self.channels = channels
         self.alpha_logscale = alpha_logscale
-
+        self.channel_axis = channel_axis
         if alpha_logscale:
             self.alpha = mx.zeros((channels,))
             self.beta = mx.zeros((channels,))
@@ -100,145 +111,168 @@ class SnakeBeta(nn.Module):
             self.beta = mx.ones((channels,))
 
     def __call__(self, x: mx.array) -> mx.array:
-        alpha = self.alpha[None, :, None]
-        beta = self.beta[None, :, None]
-
+        axis = _normalized_axis(self.channel_axis, x.ndim)
+        shape = [1] * x.ndim
+        shape[axis] = self.channels
+        alpha = self.alpha.reshape(shape)
+        beta = self.beta.reshape(shape)
         if self.alpha_logscale:
             alpha = mx.exp(alpha)
             beta = mx.exp(beta)
-
-        return x + (1.0 / (beta + 1e-9)) * mx.power(mx.sin(alpha * x), 2)
+        sine = mx.sin(alpha * x)
+        return x + (sine * sine) / (beta + 1e-9)
 
 
 class UpSample1d(nn.Module):
-    """1D upsampling with Kaiser-sinc low-pass filter.
+    """Kaiser-sinc depthwise upsampling in NCL or NLC layout."""
 
-    Matches PyTorch alias_free_torch.UpSample1d.
-    Input: NCL format (batch, channels, length).
-    Uses depthwise transposed convolution (groups=C) for GPU acceleration.
-    """
-
-    def __init__(self, ratio: int = 2, kernel_size: int = None):
+    def __init__(
+        self,
+        ratio: int = 2,
+        kernel_size: int | None = None,
+        channel_axis: int = 1,
+    ):
         super().__init__()
         self.ratio = ratio
-        self.kernel_size = int(6 * ratio // 2) * 2 if kernel_size is None else kernel_size
+        self.kernel_size = (
+            int(6 * ratio // 2) * 2
+            if kernel_size is None
+            else kernel_size
+        )
+        self.channel_axis = channel_axis
         self.stride = ratio
         self.pad = self.kernel_size // ratio - 1
-        self.pad_left = self.pad * self.stride + (self.kernel_size - self.stride) // 2
-        self.pad_right = self.pad * self.stride + (self.kernel_size - self.stride + 1) // 2
+        self.pad_left = (
+            self.pad * self.stride
+            + (self.kernel_size - self.stride) // 2
+        )
+        self.pad_right = (
+            self.pad * self.stride
+            + (self.kernel_size - self.stride + 1) // 2
+        )
 
-        # Create filter: shape (kernel_size,) for now, will be expanded in __call__
         filter_np = kaiser_sinc_filter1d(
             cutoff=0.5 / ratio,
             half_width=0.6 / ratio,
-            kernel_size=self.kernel_size
+            kernel_size=self.kernel_size,
         )
-        # Store as (1, kernel_size, 1) for depthwise conv_transpose1d
-        self._filter = mx.array(filter_np.reshape(1, kernel_size, 1))
+        self._filter = mx.array(
+            filter_np.reshape(1, self.kernel_size, 1)
+        )
 
     def __call__(self, x: mx.array) -> mx.array:
-        """Upsample via transposed convolution with anti-aliasing filter.
+        axis = _normalized_axis(self.channel_axis, x.ndim)
+        if x.ndim != 3 or axis not in (1, 2):
+            raise ValueError("UpSample1d expects 3D NCL or NLC input")
 
-        Args:
-            x: Input (batch, channels, length) NCL format
+        if axis == 1:
+            channels = x.shape[1]
+            x_nlc = mx.pad(
+                x,
+                ((0, 0), (0, 0), (self.pad, self.pad)),
+                mode="edge",
+            ).transpose(0, 2, 1)
+        else:
+            channels = x.shape[2]
+            x_nlc = mx.pad(
+                x,
+                ((0, 0), (self.pad, self.pad), (0, 0)),
+                mode="edge",
+            )
 
-        Returns:
-            Upsampled (batch, channels, length * ratio)
-        """
-        batch, channels, length = x.shape
-
-        # Keep padding on MLX to avoid CPU round-trips in the vocoder path.
-        x_padded = mx.pad(x, ((0, 0), (0, 0), (self.pad, self.pad)), mode="edge")
-
-        # NCL -> NLC for conv_transpose1d
-        x_nlc = x_padded.transpose(0, 2, 1)  # (batch, padded_length, channels)
-
-        # Expand filter for depthwise: (1, kernel_size, 1) -> (channels, kernel_size, 1)
-        # conv_transpose1d weight shape: (C_out, K, C_in) with groups=C means C_in=1
-        filter_expanded = mx.broadcast_to(self._filter, (channels, self.kernel_size, 1))
-
-        # Depthwise transposed convolution
-        out = mx.conv_transpose1d(x_nlc, filter_expanded, stride=self.stride, groups=channels)
-
-        # Scale by ratio
+        filter_expanded = mx.broadcast_to(
+            self._filter,
+            (channels, self.kernel_size, 1),
+        )
+        out = mx.conv_transpose1d(
+            x_nlc,
+            filter_expanded,
+            stride=self.stride,
+            groups=channels,
+        )
         out = out * self.ratio
 
-        # NLC -> NCL
-        out = out.transpose(0, 2, 1)
-
-        # Crop
         if self.pad_right > 0:
-            out = out[:, :, self.pad_left:-self.pad_right]
+            out = out[:, self.pad_left : -self.pad_right, :]
         else:
-            out = out[:, :, self.pad_left:]
-
-        return out
+            out = out[:, self.pad_left :, :]
+        return out.transpose(0, 2, 1) if axis == 1 else out
 
 
 class DownSample1d(nn.Module):
-    """1D downsampling with Kaiser-sinc low-pass filter.
+    """Kaiser-sinc depthwise downsampling in NCL or NLC layout."""
 
-    Matches PyTorch alias_free_torch.DownSample1d.
-    Input: NCL format (batch, channels, length).
-    Uses depthwise convolution (groups=C) for GPU acceleration.
-    """
-
-    def __init__(self, ratio: int = 2, kernel_size: int = None):
+    def __init__(
+        self,
+        ratio: int = 2,
+        kernel_size: int | None = None,
+        channel_axis: int = 1,
+    ):
         super().__init__()
         self.ratio = ratio
-        self.kernel_size = int(6 * ratio // 2) * 2 if kernel_size is None else kernel_size
+        self.kernel_size = (
+            int(6 * ratio // 2) * 2
+            if kernel_size is None
+            else kernel_size
+        )
+        self.channel_axis = channel_axis
 
-        # Create lowpass filter: shape (1, kernel_size, 1) for depthwise conv
         filter_np = kaiser_sinc_filter1d(
             cutoff=0.5 / ratio,
             half_width=0.6 / ratio,
-            kernel_size=self.kernel_size
+            kernel_size=self.kernel_size,
         )
-        self._filter = mx.array(filter_np.reshape(1, kernel_size, 1))
+        self._filter = mx.array(
+            filter_np.reshape(1, self.kernel_size, 1)
+        )
 
-        # Padding (same as PyTorch LowPassFilter1d)
-        even = (self.kernel_size % 2 == 0)
+        even = self.kernel_size % 2 == 0
         self.pad_left = self.kernel_size // 2 - int(even)
         self.pad_right = self.kernel_size // 2
 
     def __call__(self, x: mx.array) -> mx.array:
-        """Downsample via strided convolution with anti-aliasing filter.
+        axis = _normalized_axis(self.channel_axis, x.ndim)
+        if x.ndim != 3 or axis not in (1, 2):
+            raise ValueError("DownSample1d expects 3D NCL or NLC input")
 
-        Args:
-            x: Input (batch, channels, length) NCL format
+        if axis == 1:
+            channels = x.shape[1]
+            x_nlc = mx.pad(
+                x,
+                (
+                    (0, 0),
+                    (0, 0),
+                    (self.pad_left, self.pad_right),
+                ),
+                mode="edge",
+            ).transpose(0, 2, 1)
+        else:
+            channels = x.shape[2]
+            x_nlc = mx.pad(
+                x,
+                (
+                    (0, 0),
+                    (self.pad_left, self.pad_right),
+                    (0, 0),
+                ),
+                mode="edge",
+            )
 
-        Returns:
-            Downsampled (batch, channels, length // ratio)
-        """
-        batch, channels, length = x.shape
-
-        # Keep padding on MLX to avoid CPU round-trips in the vocoder path.
-        x_padded = mx.pad(x, ((0, 0), (0, 0), (self.pad_left, self.pad_right)), mode="edge")
-
-        # NCL -> NLC for conv1d
-        x_nlc = x_padded.transpose(0, 2, 1)  # (batch, padded_length, channels)
-
-        # Expand filter for depthwise: (1, kernel_size, 1) -> (channels, kernel_size, 1)
-        filter_expanded = mx.broadcast_to(self._filter, (channels, self.kernel_size, 1))
-
-        # Depthwise strided convolution
-        out = mx.conv1d(x_nlc, filter_expanded, stride=self.ratio, groups=channels)
-
-        # NLC -> NCL
-        out = out.transpose(0, 2, 1)
-
-        return out
+        filter_expanded = mx.broadcast_to(
+            self._filter,
+            (channels, self.kernel_size, 1),
+        )
+        out = mx.conv1d(
+            x_nlc,
+            filter_expanded,
+            stride=self.ratio,
+            groups=channels,
+        )
+        return out.transpose(0, 2, 1) if axis == 1 else out
 
 
 class Activation1d(nn.Module):
-    """1D anti-aliased activation.
-
-    Applies: upsample -> activation -> downsample
-    This prevents aliasing artifacts in audio generation.
-    Matches PyTorch alias_free_torch.Activation1d.
-
-    Expects input in NCL format (batch, channels, length).
-    """
+    """Anti-aliased activation supporting NCL and NLC layouts."""
 
     def __init__(
         self,
@@ -247,34 +281,42 @@ class Activation1d(nn.Module):
         down_ratio: int = 2,
         up_kernel_size: int = 12,
         down_kernel_size: int = 12,
+        channel_axis: int | None = None,
     ):
         super().__init__()
         self.up_ratio = up_ratio
         self.down_ratio = down_ratio
         self.act = activation
-        self.upsample = UpSample1d(up_ratio, up_kernel_size)
-        self.downsample = DownSample1d(down_ratio, down_kernel_size)
+        self.channel_axis = (
+            getattr(activation, "channel_axis", 1)
+            if channel_axis is None
+            else channel_axis
+        )
+        self.upsample = UpSample1d(
+            up_ratio,
+            up_kernel_size,
+            channel_axis=self.channel_axis,
+        )
+        self.downsample = DownSample1d(
+            down_ratio,
+            down_kernel_size,
+            channel_axis=self.channel_axis,
+        )
 
     def __call__(self, x: mx.array) -> mx.array:
-        """Apply anti-aliased activation.
-
-        Args:
-            x: Input (batch, channels, length) NCL format
-
-        Returns:
-            Activated (batch, channels, length)
-        """
         x = self.upsample(x)
         x = self.act(x)
-        x = self.downsample(x)
-        return x
+        return self.downsample(x)
 
 
-def get_activation(name: str, channels: int, alpha_logscale: bool = True) -> nn.Module:
-    """Get activation function by name."""
+def get_activation(
+    name: str,
+    channels: int,
+    alpha_logscale: bool = True,
+) -> nn.Module:
+    """Get a periodic activation by name in the historical NCL layout."""
     if name == "snake":
         return Snake(channels, alpha_logscale)
-    elif name == "snakebeta":
+    if name == "snakebeta":
         return SnakeBeta(channels, alpha_logscale)
-    else:
-        raise ValueError(f"Unknown activation: {name}")
+    raise ValueError(f"Unknown activation: {name}")

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import Any
 
 BYTES_PER_GB = 1024 ** 3
 DEFAULT_MEMORY_CAP_GB = 96.0
@@ -41,6 +42,13 @@ def _env_float(*names: str) -> float | None:
     return None
 
 
+def _env_bool(name: str, default: bool = True) -> bool:
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
 def _normalize_limit(value: float | None) -> float | None:
     if value is None or value <= 0:
         return None
@@ -61,8 +69,16 @@ def resolve_mlx_memory_limits(
     32GB cache, leaving RAM for PyTorch preprocessing, audio codecs, and the OS.
     """
     source = "auto"
-    env_memory = _env_float("MLX_INDEXTTS_MEMORY_LIMIT_GB", "MLX_TTS_MEMORY_LIMIT_GB", "MLX_MEMORY_LIMIT_GB")
-    env_cache = _env_float("MLX_INDEXTTS_CACHE_LIMIT_GB", "MLX_TTS_CACHE_LIMIT_GB", "MLX_CACHE_LIMIT_GB")
+    env_memory = _env_float(
+        "MLX_INDEXTTS_MEMORY_LIMIT_GB",
+        "MLX_TTS_MEMORY_LIMIT_GB",
+        "MLX_MEMORY_LIMIT_GB",
+    )
+    env_cache = _env_float(
+        "MLX_INDEXTTS_CACHE_LIMIT_GB",
+        "MLX_TTS_CACHE_LIMIT_GB",
+        "MLX_CACHE_LIMIT_GB",
+    )
 
     if memory_limit_gb is None:
         memory_limit_gb = env_memory
@@ -78,7 +94,11 @@ def resolve_mlx_memory_limits(
     elif source == "auto":
         source = "explicit"
 
-    total_bytes = total_memory_bytes if total_memory_bytes is not None else _system_memory_bytes()
+    total_bytes = (
+        total_memory_bytes
+        if total_memory_bytes is not None
+        else _system_memory_bytes()
+    )
     total_gb = (float(total_bytes) / BYTES_PER_GB) if total_bytes else 0.0
 
     if memory_limit_gb is None and total_gb >= LARGE_UNIFIED_MEMORY_GB:
@@ -125,9 +145,37 @@ def configure_mlx_runtime(
     return limits
 
 
+def schedule_mlx_eval(*arrays_or_trees: Any) -> bool:
+    """Materialize MLX outputs together, preferring non-blocking submission.
+
+    MLX decode and diffusion loops often need multiple outputs from the same graph.
+    Scheduling them in one call prevents a scalar ``item()`` followed by a second
+    cache evaluation from materializing overlapping graph branches separately.
+
+    Set ``MLX_INDEXTTS_ASYNC_EVAL=0`` to force the blocking compatibility path.
+    The return value is ``True`` when ``mx.async_eval`` was used.
+    """
+    import mlx.core as mx
+
+    async_eval = getattr(mx, "async_eval", None)
+    if async_eval is not None and _env_bool("MLX_INDEXTTS_ASYNC_EVAL", True):
+        try:
+            async_eval(*arrays_or_trees)
+            return True
+        except Exception:
+            # Older MLX builds may expose async_eval with narrower tree support.
+            # A real graph error is re-raised by the blocking fallback below.
+            pass
+    mx.eval(*arrays_or_trees)
+    return False
+
+
 def configure_torch_threads(default_threads: int | None = None) -> int | None:
     """Set a bounded PyTorch CPU preprocessing thread count when torch is loaded."""
-    raw = os.environ.get("MLX_INDEXTTS_TORCH_THREADS") or os.environ.get("MLX_TTS_TORCH_THREADS")
+    raw = (
+        os.environ.get("MLX_INDEXTTS_TORCH_THREADS")
+        or os.environ.get("MLX_TTS_TORCH_THREADS")
+    )
     if raw:
         try:
             threads = max(1, int(raw))
