@@ -16,6 +16,11 @@ from mlx_indextts.models.gpt2 import GPT2Model
 from mlx_indextts.models.conformer import ConformerEncoder
 from mlx_indextts.models.perceiver import PerceiverResampler
 from mlx_indextts.models.attention import LearnedPositionEmbedding, AttentionBlock
+from mlx_indextts.models.sampling import (
+    RepetitionPenaltyState,
+    apply_repetition_penalty,
+    sample_logits,
+)
 
 
 class ConditioningEncoder(nn.Module):
@@ -185,6 +190,10 @@ class UnifiedVoiceV2(nn.Module):
         self.final_norm = nn.LayerNorm(self.model_dim)
         self.text_head = nn.Linear(self.model_dim, self.number_text_tokens + 1)
         self.mel_head = nn.Linear(self.model_dim, self.number_mel_codes)
+
+    def new_repetition_state(self) -> RepetitionPenaltyState:
+        """Create list-compatible token history with an incremental seen mask."""
+        return RepetitionPenaltyState(self.number_mel_codes)
 
     def get_conditioning(
         self,
@@ -388,36 +397,8 @@ class UnifiedVoiceV2(nn.Module):
         generated_tokens: List[int],
         penalty: float,
     ) -> mx.array:
-        """Apply repetition penalty to logits.
-
-        For tokens that have been generated before:
-        - If logits > 0: divide by penalty (reduce probability)
-        - If logits < 0: multiply by penalty (reduce probability)
-
-        Args:
-            logits: Logits (batch, vocab_size)
-            generated_tokens: List of previously generated token IDs
-            penalty: Repetition penalty (1.0 = no penalty, >1.0 = penalize)
-
-        Returns:
-            Modified logits
-        """
-        if penalty == 1.0 or not generated_tokens:
-            return logits
-
-        vocab_size = logits.shape[-1]
-        unique_tokens = sorted({token for token in generated_tokens if 0 <= token < vocab_size})
-        if not unique_tokens:
-            return logits
-
-        token_ids = mx.array([unique_tokens], dtype=mx.int32)
-        token_logits = mx.take_along_axis(logits, token_ids, axis=-1)
-        penalized = mx.where(
-            token_logits > 0,
-            token_logits / penalty,
-            token_logits * penalty,
-        )
-        return mx.put_along_axis(logits, token_ids, penalized, axis=-1)
+        """Apply a sign-aware penalty to tokens already generated."""
+        return apply_repetition_penalty(logits, generated_tokens, penalty)
 
     def _sample(
         self,
@@ -428,62 +409,15 @@ class UnifiedVoiceV2(nn.Module):
         repetition_penalty: float = 1.0,
         generated_tokens: Optional[List[int]] = None,
     ) -> mx.array:
-        """Sample from logits.
-
-        Args:
-            logits: Logits (batch, vocab_size)
-            temperature: Sampling temperature
-            top_k: Top-k filtering
-            top_p: Top-p (nucleus) filtering
-            repetition_penalty: Penalty for repeating tokens
-            generated_tokens: List of previously generated token IDs
-
-        Returns:
-            Sampled tokens (batch,)
-        """
-        # Apply repetition penalty first (before temperature)
-        if repetition_penalty != 1.0 and generated_tokens:
-            logits = self._apply_repetition_penalty(logits, generated_tokens, repetition_penalty)
-
-        if temperature == 0:
-            return mx.argmax(logits, axis=-1)
-
-        # Apply temperature
-        logits = logits / temperature
-
-        # Top-k filtering
-        if top_k > 0:
-            top_k = min(top_k, logits.shape[-1])
-            top_k_values = mx.topk(logits, top_k)
-            threshold = top_k_values[:, :1]
-            indices_to_remove = logits < threshold
-            logits = mx.where(indices_to_remove, float("-inf"), logits)
-
-        # Top-p (nucleus) filtering
-        if top_p < 1.0:
-            sorted_indices = mx.argsort(logits, axis=-1)[:, ::-1]
-            sorted_logits = mx.take_along_axis(logits, sorted_indices, axis=-1)
-            cumulative_probs = mx.cumsum(mx.softmax(sorted_logits, axis=-1), axis=-1)
-
-            sorted_indices_to_remove = cumulative_probs > top_p
-            first_col = mx.zeros((sorted_indices_to_remove.shape[0], 1), dtype=mx.bool_)
-            sorted_indices_to_remove = mx.concatenate([
-                first_col,
-                sorted_indices_to_remove[:, :-1]
-            ], axis=-1)
-
-            indices_to_remove = mx.zeros_like(sorted_indices_to_remove)
-            indices_to_remove = mx.put_along_axis(
-                indices_to_remove,
-                sorted_indices,
-                sorted_indices_to_remove,
-                axis=-1,
-            )
-            logits = mx.where(indices_to_remove, float("-inf"), logits)
-
-        # Sample
-        probs = mx.softmax(logits, axis=-1)
-        return mx.random.categorical(mx.log(probs + 1e-10))
+        """Sample from logits using bounded top-k/top-p candidate work."""
+        return sample_logits(
+            logits,
+            temperature=temperature,
+            top_k=top_k,
+            top_p=top_p,
+            repetition_penalty=repetition_penalty,
+            generated_tokens=generated_tokens,
+        )
 
     def forward_latent(
         self,
