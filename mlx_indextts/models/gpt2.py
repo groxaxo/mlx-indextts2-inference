@@ -1,9 +1,92 @@
 """GPT-2 model implementation for IndexTTS."""
 
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 import mlx.core as mx
 import mlx.nn as nn
+
+
+class KVCache(list):
+    """Chunked KV cache that avoids reallocating the full history every token.
+
+    The cache intentionally stores pre-head K/V tensors with shape ``(B, T, D)``
+    so it remains compatible with the historical ``cache[layer][0/1]`` contract
+    used by IndexTTS. Capacity grows in coarse chunks and new tokens are written
+    into the existing MLX arrays in place, matching the strategy used by MLX-LM.
+    """
+
+    step = 256
+
+    def __init__(self, step: int = 256):
+        super().__init__([None, None])
+        self.step = max(1, int(step))
+        self.keys: Optional[mx.array] = None
+        self.values: Optional[mx.array] = None
+        self.offset = 0
+
+    @property
+    def capacity(self) -> int:
+        return 0 if self.keys is None else int(self.keys.shape[1])
+
+    def update_and_fetch(
+        self,
+        keys: mx.array,
+        values: mx.array,
+    ) -> Tuple[mx.array, mx.array]:
+        if keys.ndim != 3 or values.ndim != 3:
+            raise ValueError("KVCache expects K/V tensors with shape (B, T, D)")
+        if keys.shape[:2] != values.shape[:2]:
+            raise ValueError("KVCache key/value batch and sequence dimensions must match")
+
+        previous = self.offset
+        new_tokens = int(keys.shape[1])
+        required = previous + new_tokens
+
+        if self.keys is None or required > self.capacity:
+            batch_size = int(keys.shape[0])
+            key_dim = int(keys.shape[2])
+            value_dim = int(values.shape[2])
+            growth = ((new_tokens + self.step - 1) // self.step) * self.step
+            new_k = mx.zeros((batch_size, growth, key_dim), dtype=keys.dtype)
+            new_v = mx.zeros((batch_size, growth, value_dim), dtype=values.dtype)
+
+            if self.keys is None:
+                self.keys, self.values = new_k, new_v
+            else:
+                # Keep only the logical prefix before growing. This prevents a
+                # partially used capacity block from becoming part of the next
+                # logical cache and mirrors MLX-LM's chunked KVCache behavior.
+                if previous % self.step != 0:
+                    self.keys = self.keys[:, :previous, :]
+                    self.values = self.values[:, :previous, :]
+                self.keys = mx.concatenate([self.keys, new_k], axis=1)
+                self.values = mx.concatenate([self.values, new_v], axis=1)
+
+        self.offset = required
+        self.keys[:, previous:self.offset, :] = keys
+        self.values[:, previous:self.offset, :] = values
+
+        active_keys = self.keys[:, :self.offset, :]
+        active_values = self.values[:, :self.offset, :]
+        # Keep list semantics so mx.eval(cache) and cache[layer][0/1] continue
+        # to work exactly as they did with the historical tuple cache.
+        self[0] = active_keys
+        self[1] = active_values
+        return active_keys, active_values
+
+    @classmethod
+    def from_legacy(
+        cls,
+        state: Tuple[mx.array, mx.array],
+        *,
+        step: int = 256,
+    ) -> "KVCache":
+        cache = cls(step=step)
+        cache.update_and_fetch(state[0], state[1])
+        return cache
+
+
+CacheState = Union[KVCache, Tuple[mx.array, mx.array]]
 
 
 class GPT2Attention(nn.Module):
@@ -29,49 +112,49 @@ class GPT2Attention(nn.Module):
         self,
         x: mx.array,
         mask: Optional[mx.array] = None,
-        cache: Optional[Tuple[mx.array, mx.array]] = None,
-    ) -> Tuple[mx.array, Optional[Tuple[mx.array, mx.array]]]:
+        cache: Optional[CacheState] = None,
+    ) -> Tuple[mx.array, KVCache]:
         """Forward pass.
 
         Args:
             x: Input tensor (batch, seq_len, dim)
             mask: Attention mask
-            cache: KV cache tuple
+            cache: Chunked KV cache, or a legacy ``(k, v)`` tuple
 
         Returns:
             Output tensor and updated cache
         """
-        batch_size, seq_len, _ = x.shape
+        batch_size, _, _ = x.shape
 
         # Combined QKV projection
         qkv = self.c_attn(x)
         q, k, v = mx.split(qkv, 3, axis=-1)
 
-        # Handle cache
-        if cache is not None:
-            k_cache, v_cache = cache
-            k = mx.concatenate([k_cache, k], axis=1)
-            v = mx.concatenate([v_cache, v], axis=1)
-
-        new_cache = (k, v)
+        # Preserve backwards compatibility with callers that may still hand in
+        # a tuple cache while using the chunked representation for all new work.
+        if cache is None:
+            cache = KVCache()
+        elif not isinstance(cache, KVCache):
+            cache = KVCache.from_legacy(cache)
+        k, v = cache.update_and_fetch(k, v)
 
         # Reshape for multi-head attention
         q = q.reshape(batch_size, -1, self.num_heads, self.head_dim).transpose(0, 2, 1, 3)
         k = k.reshape(batch_size, -1, self.num_heads, self.head_dim).transpose(0, 2, 1, 3)
         v = v.reshape(batch_size, -1, self.num_heads, self.head_dim).transpose(0, 2, 1, 3)
 
-        # Attention scores
-        scores = mx.matmul(q, k.transpose(0, 1, 3, 2)) * self.scale
-
-        # Apply mask
-        if mask is not None:
-            scores = scores + mask
-
-        # Softmax
-        attn = mx.softmax(scores, axis=-1)
-
-        # Apply to values
-        out = mx.matmul(attn, v)
+        # Prefer MLX's fused attention kernel when available. The fallback keeps
+        # compatibility with older MLX versions allowed by pyproject.toml.
+        fast = getattr(mx, "fast", None)
+        sdpa = getattr(fast, "scaled_dot_product_attention", None)
+        if sdpa is not None:
+            out = sdpa(q, k, v, scale=self.scale, mask=mask)
+        else:
+            scores = mx.matmul(q, k.transpose(0, 1, 3, 2)) * self.scale
+            if mask is not None:
+                scores = scores + mask
+            attn = mx.softmax(scores, axis=-1)
+            out = mx.matmul(attn, v)
 
         # Reshape back
         out = out.transpose(0, 2, 1, 3).reshape(batch_size, -1, self.dim)
@@ -79,7 +162,7 @@ class GPT2Attention(nn.Module):
         # Output projection
         out = self.c_proj(out)
 
-        return out, new_cache
+        return out, cache
 
 
 class GPT2MLP(nn.Module):
@@ -115,8 +198,8 @@ class GPT2Block(nn.Module):
         self,
         x: mx.array,
         mask: Optional[mx.array] = None,
-        cache: Optional[Tuple[mx.array, mx.array]] = None,
-    ) -> Tuple[mx.array, Optional[Tuple[mx.array, mx.array]]]:
+        cache: Optional[CacheState] = None,
+    ) -> Tuple[mx.array, KVCache]:
         """Forward pass."""
         # Self-attention with residual
         residual = x
@@ -174,8 +257,8 @@ class GPT2Model(nn.Module):
         self,
         inputs_embeds: mx.array,
         mask: Optional[mx.array] = None,
-        cache: Optional[List[Tuple[mx.array, mx.array]]] = None,
-    ) -> Tuple[mx.array, Optional[List[Tuple[mx.array, mx.array]]]]:
+        cache: Optional[List[CacheState]] = None,
+    ) -> Tuple[mx.array, List[KVCache]]:
         """Forward pass.
 
         Args:
@@ -192,7 +275,7 @@ class GPT2Model(nn.Module):
 
         # Calculate key length (includes cached tokens if any)
         if cache is not None and cache[0] is not None:
-            cache_len = cache[0][0].shape[1]  # K cache shape: (batch, cache_len, dim)
+            cache_len = cache[0][0].shape[1]
             key_len = cache_len + query_len
         else:
             key_len = query_len
@@ -227,7 +310,7 @@ class GPT2Model(nn.Module):
         """
         # Create mask where each query position can only attend to
         # key positions up to and including itself
-        # For incremental decoding: query at position i attends to keys 0..i
+        # For incremental generation: query at position i attends to keys 0..i
         #
         # With cache, if we're at step N (cache has N tokens, query_len=1):
         # - key_len = N + 1
