@@ -219,6 +219,11 @@ class IndexTTSv25(IndexTTSv2):
             strict=True,
         )
 
+        # Reuse the v2.0 best-effort compile policy for the equivalent 2.5
+        # S2Mel projection and BigVGAN hot paths. The helper already falls back
+        # to eager execution when an installed MLX build cannot compile them.
+        self._compile_hotpaths()
+
     def _ensure_pytorch_modules(self) -> None:
         if self._preprocessing_initialized:
             return
@@ -398,11 +403,22 @@ class IndexTTSv25(IndexTTSv2):
         mel_start_emb = self.gpt.mel_embedding(mel_start)
         mel_start_emb = mel_start_emb + self.gpt.mel_pos_embedding.get_fixed_embedding(0)
         current_emb = mx.concatenate([input_emb, mel_start_emb], axis=1)
-        current_mask = mx.concatenate(
+        initial_mask = mx.concatenate(
             [padding_mask, mx.ones((padding_mask.shape[0], 1), dtype=mx.int32)],
             axis=1,
         )
-        generated: list[int] = []
+        generation_mask = mx.concatenate(
+            [
+                initial_mask,
+                mx.ones(
+                    (initial_mask.shape[0], max_mel_tokens),
+                    dtype=mx.int32,
+                ),
+            ],
+            axis=1,
+        )
+        active_mask_length = int(initial_mask.shape[1])
+        generated = self.gpt.new_repetition_state()
         cache = None
         for _ in range(max_mel_tokens):
             next_token, _, cache = self.gpt.generate_step(
@@ -413,7 +429,7 @@ class IndexTTSv25(IndexTTSv2):
                 top_p=top_p,
                 repetition_penalty=repetition_penalty,
                 generated_tokens=generated,
-                attention_mask=current_mask,
+                attention_mask=generation_mask[:, :active_mask_length],
             )
             token = int(next_token[0].item())
             if token == self.gpt.stop_mel_token:
@@ -425,10 +441,7 @@ class IndexTTSv25(IndexTTSv2):
             current_emb = current_emb + self.gpt.mel_pos_embedding.get_fixed_embedding(
                 len(generated)
             )
-            current_mask = mx.concatenate(
-                [current_mask, mx.ones((current_mask.shape[0], 1), dtype=mx.int32)],
-                axis=1,
-            )
+            active_mask_length += 1
         if len(generated) >= max_mel_tokens:
             warnings.warn(
                 f"generation reached max_mel_tokens={max_mel_tokens}",
