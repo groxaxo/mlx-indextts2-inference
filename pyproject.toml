@@ -1,12 +1,21 @@
 [project]
 name = "mlx-indextts"
 version = "0.2.0"
-description = "IndexTTS 2.0 and 2.5 for Apple Silicon using MLX"
+description = "Native Apple Silicon voice cloning and expressive multilingual speech synthesis with IndexTTS 2.0/2.5 and MLX"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
 authors = [{ name = "MLX-IndexTTS Contributors" }]
-keywords = ["tts", "text-to-speech", "mlx", "apple-silicon", "voice-cloning"]
+keywords = [
+    "tts",
+    "text-to-speech",
+    "indextts",
+    "mlx",
+    "apple-silicon",
+    "voice-cloning",
+    "emotion-control",
+    "multilingual-tts",
+]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -106,9 +115,10 @@ mlx-indextts-api = "mlx_indextts.api_server:main"
 mlx-indextts-webui = "mlx_indextts.webui:main"
 
 [project.urls]
-Homepage = "https://github.com/vanch007/mlx-indextts2"
-Repository = "https://github.com/vanch007/mlx-indextts2"
-Issues = "https://github.com/vanch007/mlx-indextts2/issues"
+Homepage = "https://github.com/groxaxo/mlx-indextts2-inference"
+Documentation = "https://github.com/groxaxo/mlx-indextts2-inference/tree/main/docs"
+Repository = "https://github.com/groxaxo/mlx-indextts2-inference"
+Issues = "https://github.com/groxaxo/mlx-indextts2-inference/issues"
 
 [build-system]
 requires = ["hatchling"]
