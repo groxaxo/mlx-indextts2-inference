@@ -135,30 +135,31 @@ class CFM(nn.Module):
         Returns:
             Denoised mel spectrogram (batch, in_channels, seq_len)
         """
-        t = t_span[0]
         T = x.shape[2]
-
-        # Apply prompt - MLX doesn't support .at[].set(), use concatenation
         prompt_len = prompt.shape[-1]
 
-        # Create prompt_x: prompt in first prompt_len positions, zeros elsewhere
-        prompt_x = mx.concatenate([
-            prompt[:, :, :prompt_len],
-            mx.zeros((x.shape[0], x.shape[1], T - prompt_len))
-        ], axis=2)
-
-        # Zero out prompt region in x
-        x = mx.concatenate([
-            mx.zeros((x.shape[0], x.shape[1], prompt_len)),
-            x[:, :, prompt_len:]
-        ], axis=2)
+        # These prompt-zero tensors are invariant across every Euler step. Reuse
+        # them instead of allocating a new prefix on each diffusion iteration.
+        zero_prompt_region = mx.zeros(
+            (x.shape[0], x.shape[1], prompt_len),
+            dtype=x.dtype,
+        )
+        prompt_tail_zeros = mx.zeros(
+            (x.shape[0], x.shape[1], T - prompt_len),
+            dtype=prompt.dtype,
+        )
+        prompt_x = mx.concatenate(
+            [prompt[:, :, :prompt_len], prompt_tail_zeros],
+            axis=2,
+        )
+        x = mx.concatenate([zero_prompt_region, x[:, :, prompt_len:]], axis=2)
 
         if self.zero_prompt_speech_token:
-            # Zero out prompt region in mu
-            mu = mx.concatenate([
-                mx.zeros((mu.shape[0], prompt_len, mu.shape[2])),
-                mu[:, prompt_len:, :]
-            ], axis=1)
+            zero_mu_prefix = mx.zeros(
+                (mu.shape[0], prompt_len, mu.shape[2]),
+                dtype=mu.dtype,
+            )
+            mu = mx.concatenate([zero_mu_prefix, mu[:, prompt_len:, :]], axis=1)
 
         # CFG null inputs are invariant across Euler steps. Constructing these
         # large tensors inside every step adds avoidable unified-memory traffic.
@@ -169,20 +170,27 @@ class CFM(nn.Module):
             stacked_prompt_x = mx.concatenate([prompt_x, null_prompt_x], axis=0)
             stacked_style = mx.concatenate([style, null_style], axis=0)
             stacked_mu = mx.concatenate([mu, null_mu], axis=0)
+            stacked_x_lens = mx.concatenate([x_lens, x_lens], axis=0)
+            mx.eval(stacked_prompt_x, stacked_style, stacked_mu, stacked_x_lens)
+        else:
+            mx.eval(prompt_x)
 
         for step in range(1, len(t_span)):
-            dt = t_span[step] - t_span[step - 1]
+            # Use the schedule directly rather than carrying a scalar dependency
+            # chain from one Euler iteration to the next.
+            t = t_span[step - 1]
+            dt = t_span[step] - t
 
             if inference_cfg_rate > 0:
                 # CFG: stack original and null inputs
                 stacked_x = mx.concatenate([x, x], axis=0)
-                stacked_t = mx.array([t, t])
+                stacked_t = mx.broadcast_to(t, (stacked_x.shape[0],))
 
                 # Single forward pass for both
                 stacked_dphi_dt = self.estimator(
                     stacked_x,
                     stacked_prompt_x,
-                    x_lens,
+                    stacked_x_lens,
                     stacked_t,
                     stacked_style,
                     stacked_mu,
@@ -192,24 +200,21 @@ class CFM(nn.Module):
                 dphi_dt, cfg_dphi_dt = mx.split(stacked_dphi_dt, 2, axis=0)
                 dphi_dt = (1.0 + inference_cfg_rate) * dphi_dt - inference_cfg_rate * cfg_dphi_dt
             else:
+                timestep = mx.broadcast_to(t, (x.shape[0],))
                 dphi_dt = self.estimator(
                     x,
                     prompt_x,
                     x_lens,
-                    mx.array([t]),
+                    timestep,
                     style,
                     mu,
                 )
 
             # Euler step
             x = x + dt * dphi_dt
-            t = t + dt
 
-            # Keep prompt region zero - use concatenation instead of .at[].set()
-            x = mx.concatenate([
-                mx.zeros((x.shape[0], x.shape[1], prompt_len)),
-                x[:, :, prompt_len:]
-            ], axis=2)
+            # Keep prompt region zero with the single reusable zero prefix.
+            x = mx.concatenate([zero_prompt_region, x[:, :, prompt_len:]], axis=2)
 
             # Evaluate for MLX lazy execution
             mx.eval(x)

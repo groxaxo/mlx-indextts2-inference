@@ -315,7 +315,7 @@ class Attention(nn.Module):
         Args:
             x: Input tensor (batch, seq_len, dim)
             freqs_cis: Rotary embeddings (seq_len, head_dim/2, 2)
-            mask: Optional attention mask (batch, 1, seq_len, seq_len)
+            mask: Optional broadcastable additive attention mask
 
         Returns:
             Output tensor (batch, seq_len, dim)
@@ -349,15 +349,18 @@ class Attention(nn.Module):
             k = mx.repeat(k, self.n_head // self.n_local_heads, axis=1)
             v = mx.repeat(v, self.n_head // self.n_local_heads, axis=1)
 
-        # Scaled dot-product attention
         scale = 1.0 / math.sqrt(self.head_dim)
-        scores = (q @ k.transpose(0, 1, 3, 2)) * scale
-
-        if mask is not None:
-            scores = scores + mask
-
-        attn = mx.softmax(scores, axis=-1)
-        y = attn @ v
+        fast = getattr(mx, "fast", None)
+        sdpa = getattr(fast, "scaled_dot_product_attention", None)
+        if sdpa is not None:
+            y = sdpa(q, k, v, scale=scale, mask=mask)
+        else:
+            # Compatibility fallback for older MLX builds.
+            scores = (q @ k.transpose(0, 1, 3, 2)) * scale
+            if mask is not None:
+                scores = scores + mask
+            attn = mx.softmax(scores, axis=-1)
+            y = attn @ v
 
         # Reshape back
         y = y.transpose(0, 2, 1, 3).reshape(bsz, seqlen, -1)
@@ -465,7 +468,7 @@ class Transformer(nn.Module):
             x: Input tensor (batch, seq_len, dim)
             c: Conditioning (batch, 1, dim)
             input_pos: Position indices (seq_len,)
-            mask: Attention mask (batch, 1, seq_len, seq_len) or None
+            mask: Broadcastable additive attention mask or None
 
         Returns:
             Output tensor (batch, seq_len, dim)
@@ -640,9 +643,12 @@ class DiT(nn.Module):
         # Merge inputs
         x_in = mx.concatenate([x_t, prompt_x_t, cond], axis=-1)
 
-        # Add style conditioning
+        # Add style conditioning without materializing a repeated copy first.
         if self.transformer_style_condition and not self.style_as_token:
-            style_expanded = mx.repeat(style[:, None, :], T, axis=1)
+            style_expanded = mx.broadcast_to(
+                style[:, None, :],
+                (B, T, style.shape[-1]),
+            )
             x_in = mx.concatenate([x_in, style_expanded], axis=-1)
 
         # Apply content masking for CFG
@@ -666,16 +672,21 @@ class DiT(nn.Module):
         if self.time_as_token:
             x_in = mx.concatenate([t1[:, None, :], x_in], axis=1)
 
-        # Create attention mask
         seq_len = x_in.shape[1]
         input_pos = mx.arange(seq_len)
 
-        # Full attention mask (all visible)
-        x_mask = _sequence_mask(x_lens + self.style_as_token + self.time_as_token, seq_len)
-        x_mask = x_mask[:, None, None, :]  # (batch, 1, 1, seq_len)
-        x_mask = x_mask * mx.ones((1, 1, seq_len, 1))  # (batch, 1, seq_len, seq_len)
-        # Convert to attention mask (0 for attend, -inf for mask)
-        attn_mask = mx.where(x_mask > 0, 0.0, float('-inf'))
+        # Key validity is identical for every query. Keep the mask in its
+        # broadcastable (B, 1, 1, T) form instead of materializing a T x T
+        # matrix on every diffusion step.
+        valid_keys = _sequence_mask(
+            x_lens + self.style_as_token + self.time_as_token,
+            seq_len,
+        )
+        attn_mask = mx.where(
+            valid_keys[:, None, None, :] > 0,
+            0.0,
+            float('-inf'),
+        )
 
         # Transformer forward
         x_res = self.transformer(x_in, t1[:, None, :], input_pos, attn_mask)
