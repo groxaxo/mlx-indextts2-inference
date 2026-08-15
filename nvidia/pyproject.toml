@@ -1,0 +1,34 @@
+[project]
+name = "mlx-indextts-nvidia-runtime"
+version = "0.3.0"
+description = "Pinned NVIDIA CUDA runtime environment for mlx-indextts"
+requires-python = ">=3.10,<3.12"
+dependencies = [
+  "mlx-indextts",
+  "indextts",
+  "torch==2.8.*",
+  "torchaudio==2.8.*",
+  "huggingface-hub[cli,hf_xet]>=0.34.0",
+  "fastapi>=0.115,<1",
+  "uvicorn[standard]>=0.32,<1",
+]
+
+[project.optional-dependencies]
+accel = ["indextts[accel]"]
+deepspeed = ["indextts[deepspeed]"]
+full = ["indextts[accel,deepspeed]"]
+
+[tool.uv.sources]
+mlx-indextts = { path = "..", editable = true }
+indextts = { git = "https://github.com/index-tts/index-tts.git", rev = "4f8792ff120cd3ea470dd511e997a17c86cddd10" }
+torch = [
+  { index = "pytorch-cuda", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchaudio = [
+  { index = "pytorch-cuda", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cuda"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true

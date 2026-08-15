@@ -1,101 +1,81 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="520" viewBox="0 0 1600 520" role="img" aria-labelledby="title desc">
-  <title id="title">MLX IndexTTS</title>
-  <desc id="desc">Expressive multilingual voice cloning and speech synthesis, native on Apple Silicon.</desc>
+  <title id="title">IndexTTS — Apple MLX and NVIDIA CUDA</title>
+  <desc id="desc">Expressive multilingual voice cloning across Apple Silicon and NVIDIA GPUs.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#050A16"/>
-      <stop offset="0.47" stop-color="#11142A"/>
-      <stop offset="1" stop-color="#071D28"/>
+      <stop offset="0" stop-color="#050814"/>
+      <stop offset="0.45" stop-color="#11152A"/>
+      <stop offset="1" stop-color="#071A14"/>
     </linearGradient>
     <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
       <stop offset="0" stop-color="#8B5CF6"/>
-      <stop offset="0.5" stop-color="#22D3EE"/>
-      <stop offset="1" stop-color="#34D399"/>
+      <stop offset="0.48" stop-color="#22D3EE"/>
+      <stop offset="1" stop-color="#76B900"/>
     </linearGradient>
-    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.11"/>
-      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.025"/>
-    </linearGradient>
-    <radialGradient id="orbPurple" cx="50%" cy="50%" r="50%">
-      <stop offset="0" stop-color="#8B5CF6" stop-opacity="0.34"/>
+    <radialGradient id="leftGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#8B5CF6" stop-opacity="0.35"/>
       <stop offset="1" stop-color="#8B5CF6" stop-opacity="0"/>
     </radialGradient>
-    <radialGradient id="orbCyan" cx="50%" cy="50%" r="50%">
-      <stop offset="0" stop-color="#22D3EE" stop-opacity="0.28"/>
-      <stop offset="1" stop-color="#22D3EE" stop-opacity="0"/>
+    <radialGradient id="rightGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#76B900" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#76B900" stop-opacity="0"/>
     </radialGradient>
-    <pattern id="grid" width="36" height="36" patternUnits="userSpaceOnUse">
-      <path d="M 36 0 L 0 0 0 36" fill="none" stroke="#A5B4FC" stroke-opacity="0.055" stroke-width="1"/>
-    </pattern>
-    <filter id="softGlow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="8" result="blur"/>
+    <filter id="blur"><feGaussianBlur stdDeviation="42"/></filter>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="170%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="18" result="blur"/>
+      <feOffset in="blur" dx="0" dy="12" result="offsetBlur"/>
+      <feFlood flood-color="#000000" flood-opacity="0.42" result="shadowColor"/>
+      <feComposite in="shadowColor" in2="offsetBlur" operator="in" result="shadow"/>
       <feMerge>
-        <feMergeNode in="blur"/>
+        <feMergeNode in="shadow"/>
         <feMergeNode in="SourceGraphic"/>
       </feMerge>
     </filter>
   </defs>
 
-  <rect x="0" y="0" width="1600" height="520" rx="34" fill="url(#bg)"/>
-  <rect x="1" y="1" width="1598" height="518" rx="33" fill="none" stroke="#FFFFFF" stroke-opacity="0.11" stroke-width="2"/>
-  <rect width="1600" height="520" rx="34" fill="url(#grid)"/>
-  <ellipse cx="350" cy="145" rx="370" ry="280" fill="url(#orbPurple)"/>
-  <ellipse cx="1320" cy="420" rx="430" ry="300" fill="url(#orbCyan)"/>
+  <rect width="1600" height="520" rx="32" fill="url(#bg)"/>
+  <circle cx="260" cy="90" r="270" fill="url(#leftGlow)" filter="url(#blur)"/>
+  <circle cx="1390" cy="425" r="310" fill="url(#rightGlow)" filter="url(#blur)"/>
 
-  <!-- Brand mark -->
-  <g transform="translate(86 96)">
-    <rect width="320" height="320" rx="72" fill="url(#panel)" stroke="#FFFFFF" stroke-opacity="0.14" stroke-width="2"/>
-    <rect x="20" y="20" width="280" height="280" rx="58" fill="#08101F" fill-opacity="0.72" stroke="url(#accent)" stroke-opacity="0.68" stroke-width="2"/>
-    <circle cx="160" cy="160" r="94" fill="none" stroke="#FFFFFF" stroke-opacity="0.08" stroke-width="2"/>
-    <circle cx="160" cy="160" r="68" fill="none" stroke="#22D3EE" stroke-opacity="0.16" stroke-width="2"/>
-    <g fill="none" stroke-linecap="round" stroke-width="12" filter="url(#softGlow)">
-      <path d="M70 170 C92 170 92 116 114 116 C136 116 136 206 158 206 C180 206 180 90 202 90 C224 90 224 170 250 170" stroke="#8B5CF6"/>
-      <path d="M70 170 C92 170 92 142 114 142 C136 142 136 190 158 190 C180 190 180 122 202 122 C224 122 224 170 250 170" stroke="#22D3EE" stroke-opacity="0.94"/>
-      <path d="M70 170 C92 170 92 158 114 158 C136 158 136 178 158 178 C180 178 180 150 202 150 C224 150 224 170 250 170" stroke="#34D399" stroke-opacity="0.88"/>
-    </g>
-    <circle cx="70" cy="170" r="7" fill="#8B5CF6"/>
-    <circle cx="250" cy="170" r="7" fill="#34D399"/>
+  <g opacity="0.12" stroke="#E2E8F0" stroke-width="1">
+    <path d="M0 80H1600M0 160H1600M0 240H1600M0 320H1600M0 400H1600M0 480H1600"/>
+    <path d="M100 0V520M300 0V520M500 0V520M700 0V520M900 0V520M1100 0V520M1300 0V520M1500 0V520"/>
   </g>
 
-  <!-- Main copy -->
-  <g font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">
-    <text x="468" y="139" fill="#67E8F9" font-size="34" font-weight="700" letter-spacing="10">MLX NATIVE</text>
-    <text x="464" y="240" fill="#F8FAFC" font-size="94" font-weight="820" letter-spacing="-3">INDEXTTS</text>
-    <text x="470" y="302" fill="#CBD5E1" font-size="30" font-weight="500">Expressive voice cloning on Apple Silicon.</text>
-    <text x="470" y="346" fill="#94A3B8" font-size="22" font-weight="450">IndexTTS 2.0 + 2.5 · Multilingual · Emotion-aware · Fully local</text>
+  <g transform="translate(92 84)" filter="url(#shadow)">
+    <rect width="1416" height="352" rx="28" fill="#FFFFFF" fill-opacity="0.055" stroke="#FFFFFF" stroke-opacity="0.14"/>
+    <rect x="1" y="1" width="1414" height="5" rx="3" fill="url(#accent)"/>
 
-    <g transform="translate(470 386)">
-      <rect x="0" y="0" width="166" height="48" rx="24" fill="#8B5CF6" fill-opacity="0.16" stroke="#A78BFA" stroke-opacity="0.42"/>
-      <text x="83" y="31" text-anchor="middle" fill="#DDD6FE" font-size="17" font-weight="700" letter-spacing="1.4">VOICE CLONING</text>
+    <g transform="translate(58 60)">
+      <text x="0" y="62" fill="#FFFFFF" font-family="Inter,Arial,sans-serif" font-size="66" font-weight="800" letter-spacing="-2">IndexTTS</text>
+      <text x="0" y="112" fill="#B9C3D5" font-family="Inter,Arial,sans-serif" font-size="25" font-weight="500">Expressive multilingual voice cloning</text>
+      <text x="0" y="151" fill="#7F8EA8" font-family="Inter,Arial,sans-serif" font-size="18">IndexTTS 2.0 + 2.5 · emotion control · local inference</text>
 
-      <rect x="182" y="0" width="179" height="48" rx="24" fill="#22D3EE" fill-opacity="0.13" stroke="#67E8F9" stroke-opacity="0.38"/>
-      <text x="271.5" y="31" text-anchor="middle" fill="#CFFAFE" font-size="17" font-weight="700" letter-spacing="1.3">EMOTION CONTROL</text>
+      <g transform="translate(0 190)">
+        <rect width="220" height="48" rx="24" fill="#FFFFFF" fill-opacity="0.08" stroke="#FFFFFF" stroke-opacity="0.15"/>
+        <circle cx="28" cy="24" r="10" fill="#A78BFA"/>
+        <text x="49" y="31" fill="#F8FAFC" font-family="Inter,Arial,sans-serif" font-size="17" font-weight="650">Apple Silicon · MLX</text>
+      </g>
+      <g transform="translate(236 190)">
+        <rect width="224" height="48" rx="24" fill="#76B900" fill-opacity="0.12" stroke="#76B900" stroke-opacity="0.45"/>
+        <path d="M19 24c10-14 23-14 34 0-11 14-24 14-34 0zm8 0c5 7 12 7 18 0-6-7-13-7-18 0z" fill="#76B900"/>
+        <text x="58" y="31" fill="#F4FCE8" font-family="Inter,Arial,sans-serif" font-size="17" font-weight="650">NVIDIA · CUDA</text>
+      </g>
+    </g>
 
-      <rect x="377" y="0" width="143" height="48" rx="24" fill="#34D399" fill-opacity="0.12" stroke="#6EE7B7" stroke-opacity="0.38"/>
-      <text x="448.5" y="31" text-anchor="middle" fill="#D1FAE5" font-size="17" font-weight="700" letter-spacing="1.4">API READY</text>
+    <g transform="translate(770 62)">
+      <rect width="575" height="228" rx="24" fill="#020617" fill-opacity="0.58" stroke="#FFFFFF" stroke-opacity="0.12"/>
+      <text x="28" y="42" fill="#7F8EA8" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="14">VOICE PIPELINE</text>
+      <g transform="translate(30 76)" fill="none" stroke-linecap="round">
+        <path d="M0 63 C24 63 22 18 48 18 S72 108 98 108 S124 36 150 36 S176 86 202 86 S228 10 254 10 S280 112 306 112 S332 46 358 46 S384 80 410 80 S436 26 462 26 S488 64 515 64" stroke="url(#accent)" stroke-width="5"/>
+        <path d="M0 63 C24 63 22 18 48 18 S72 108 98 108 S124 36 150 36 S176 86 202 86 S228 10 254 10 S280 112 306 112 S332 46 358 46 S384 80 410 80 S436 26 462 26 S488 64 515 64" stroke="#FFFFFF" stroke-opacity="0.18" stroke-width="12"/>
+      </g>
+      <g transform="translate(30 184)" font-family="Inter,Arial,sans-serif" font-size="14" font-weight="650">
+        <text fill="#C4B5FD">speaker</text>
+        <text x="124" fill="#67E8F9">emotion</text>
+        <text x="246" fill="#A7F3D0">multilingual</text>
+        <text x="392" fill="#BEF264">GPU-native</text>
+      </g>
     </g>
   </g>
-
-  <!-- Decorative waveform -->
-  <g transform="translate(1210 92)" opacity="0.9">
-    <rect x="0" y="0" width="302" height="304" rx="56" fill="url(#panel)" stroke="#FFFFFF" stroke-opacity="0.10"/>
-    <path d="M30 154 H272" stroke="#FFFFFF" stroke-opacity="0.08" stroke-width="2"/>
-    <g fill="url(#accent)">
-      <rect x="42" y="132" width="11" height="44" rx="5.5" opacity="0.48"/>
-      <rect x="61" y="112" width="11" height="84" rx="5.5" opacity="0.58"/>
-      <rect x="80" y="88" width="11" height="132" rx="5.5" opacity="0.68"/>
-      <rect x="99" y="123" width="11" height="62" rx="5.5" opacity="0.78"/>
-      <rect x="118" y="63" width="11" height="182" rx="5.5" opacity="0.92"/>
-      <rect x="137" y="102" width="11" height="104" rx="5.5"/>
-      <rect x="156" y="75" width="11" height="158" rx="5.5" opacity="0.96"/>
-      <rect x="175" y="118" width="11" height="72" rx="5.5" opacity="0.84"/>
-      <rect x="194" y="94" width="11" height="120" rx="5.5" opacity="0.72"/>
-      <rect x="213" y="126" width="11" height="56" rx="5.5" opacity="0.62"/>
-      <rect x="232" y="108" width="11" height="92" rx="5.5" opacity="0.54"/>
-      <rect x="251" y="135" width="11" height="38" rx="5.5" opacity="0.46"/>
-    </g>
-    <text x="151" y="278" text-anchor="middle" fill="#94A3B8" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="16" font-weight="700" letter-spacing="3">M-SERIES</text>
-  </g>
-
-  <rect x="86" y="478" width="1426" height="2" rx="1" fill="url(#accent)" opacity="0.62"/>
 </svg>

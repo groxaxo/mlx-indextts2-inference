@@ -1,82 +1,68 @@
 <p align="center">
-  <img src="docs/assets/mlx-indextts-banner.svg" alt="MLX IndexTTS — expressive voice cloning on Apple Silicon" width="100%" />
+  <img src="docs/assets/mlx-indextts-banner.svg" alt="IndexTTS on Apple Silicon MLX and NVIDIA CUDA" width="100%" />
 </p>
 
 <p align="center">
-  <a href="https://github.com/groxaxo/mlx-indextts2-inference"><img alt="Apple Silicon native" src="https://img.shields.io/badge/Apple%20Silicon-native-000000?style=flat-square&logo=apple&logoColor=white"></a>
-  <a href="https://github.com/ml-explore/mlx"><img alt="MLX native" src="https://img.shields.io/badge/MLX-native-7C3AED?style=flat-square"></a>
-  <a href="https://github.com/index-tts/index-tts"><img alt="IndexTTS 2.0 and 2.5" src="https://img.shields.io/badge/IndexTTS-2.0%20%7C%202.5-0891B2?style=flat-square"></a>
+  <a href="https://github.com/ml-explore/mlx"><img alt="Apple MLX" src="https://img.shields.io/badge/Apple%20Silicon-MLX-000000?style=flat-square&logo=apple&logoColor=white"></a>
+  <a href="docs/nvidia.md"><img alt="NVIDIA CUDA" src="https://img.shields.io/badge/NVIDIA-CUDA-76B900?style=flat-square&logo=nvidia&logoColor=white"></a>
+  <a href="https://github.com/index-tts/index-tts"><img alt="IndexTTS 2 and 2.5" src="https://img.shields.io/badge/IndexTTS-2.0%20%7C%202.5-0891B2?style=flat-square"></a>
   <img alt="Python 3.10+" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white">
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/github/license/groxaxo/mlx-indextts2-inference?style=flat-square"></a>
 </p>
 
 <p align="center">
-  <strong>Expressive, multilingual voice cloning—fully local on your Mac.</strong><br />
-  Native MLX inference for IndexTTS 2.0 and 2.5 with independent emotion control,
-  persistent quantization, batch generation, streaming, FastAPI, Gradio, and a clean Python API.
+  <strong>Expressive multilingual voice cloning on the hardware you already own.</strong><br />
+  Native MLX inference for Apple Silicon, plus a pinned official PyTorch backend for NVIDIA CUDA.
 </p>
 
 <p align="center">
-  <a href="#quick-start">Quick start</a> ·
-  <a href="#what-you-get">Features</a> ·
-  <a href="#choose-your-interface">Interfaces</a> ·
-  <a href="#model-profiles">Models</a> ·
-  <a href="#performance">Performance</a> ·
-  <a href="#documentation">Docs</a>
+  <a href="#choose-your-backend">Backends</a> ·
+  <a href="#apple-silicon-quick-start">Apple quick start</a> ·
+  <a href="#nvidia-quick-start">NVIDIA quick start</a> ·
+  <a href="#capabilities">Capabilities</a> ·
+  <a href="#documentation">Documentation</a>
 </p>
 
-> [!NOTE]
-> **IndexTTS 2.5 is the primary target.** IndexTTS 2.0 remains available for compatibility and the local Vietnamese profile. IndexTTS 1.5 is not maintained or part of the regression target.
+## Choose your backend
 
-## Why this project
-
-| Native Apple Silicon | Voice **and** emotion control | Ready beyond the demo |
+| | Apple Silicon / MLX | NVIDIA / CUDA |
 | --- | --- | --- |
-| GPT, codec, S2Mel/DiT, and BigVGAN inference run through MLX instead of hiding a PyTorch backend behind a wrapper. | Clone a speaker from a short reference while steering delivery from emotion audio, named/mixed vectors, or Qwen text analysis. | Use the same runtime through CLI, Python, batch jobs, FastAPI, Gradio, and completed-segment streaming. |
+| Runtime | Native MLX implementation in this repository | Pinned official IndexTTS PyTorch runtime |
+| Primary platform | M-series Macs | Linux/Windows NVIDIA GPUs |
+| IndexTTS 2.5 precision | Persistent 3/4/5/6/8-bit GPT, fp16/fp32 components | BF16 or FP32 |
+| IndexTTS 2.0 precision | Quantized/fp16/fp32 MLX | FP16 or FP32 |
+| Serving | CLI, batch, FastAPI, Gradio, completed-segment streaming | CLI, FastAPI, multi-GPU batch |
+| Multi-device strategy | Unified-memory MLX execution | One warm model worker per GPU |
 
-The result is a practical local speech stack for narration, dubbing, character voices, accessibility, prototyping, and private on-device workflows.
+The CUDA implementation intentionally wraps the official upstream classes at a pinned revision rather than maintaining a separate Torch fork. That keeps NVIDIA behavior aligned with official CUDA kernels, DeepSpeed, GPT acceleration, `torch.compile`, model downloads, and checkpoint formats.
 
-## What you get
+## Capabilities
 
-- **Zero-shot voice cloning** from a WAV reference or a reusable, version-safe `.npz` speaker cache.
-- **IndexTTS 2.5 multilingual synthesis** in Chinese, English, Japanese, Spanish, and Arabic.
-- **Cross-lingual voice transfer** with explicit language routing.
-- **Disentangled emotion control** using emotion audio, eight-value vectors, named/mixed emotions, or Qwen text analysis.
-- **Pronunciation guidance** for Chinese Pinyin, English CMU phonemes, and Japanese Kana.
-- **Persistent GPT quantization** at 3, 4, 5, 6, or 8 bits, plus fp16/fp32 conversion.
-- **Model-resident batch generation** with manifests, combined WAV output, duration controls, and per-row settings.
-- **FastAPI + Gradio + Python API** backed by a shared single-model cache.
-- **Completed-segment streaming** for safer progressive output without pretending to provide token-level waveform streaming.
-- **Local extensions** for Vietnamese, emotion-reference libraries, scene planning, and subtitle-oriented duration fitting.
+- Zero-shot voice cloning from reference audio.
+- IndexTTS 2.5 multilingual synthesis in Chinese, English, Japanese, Spanish, and Arabic.
+- Independent speaker and emotion control from audio, named/mixed vectors, or text descriptions.
+- Pinyin, CMU phoneme, and Japanese Kana pronunciation guidance.
+- Batch generation with model reuse instead of one model load per utterance.
+- FastAPI endpoints for both platform families.
+- Subtitle-oriented duration controls and pitch-preserving output fitting on MLX.
+- Three-GPU CUDA throughput mode that keeps one model resident on each selected GPU.
 
-## Quick start
+> [!NOTE]
+> IndexTTS 2.5 is the primary target. IndexTTS 2.0 remains supported, including the repository's local Vietnamese MLX profile.
 
-### Requirements
+## Apple Silicon quick start
 
-- macOS on an Apple Silicon Mac
-- Python 3.10 or newer
-- [`uv`](https://docs.astral.sh/uv/)
-- Enough unified memory for the model/dtype you choose
-
-### 1. Install
+### Install
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 git clone https://github.com/groxaxo/mlx-indextts2-inference.git
 cd mlx-indextts2-inference
-
-# Core IndexTTS 2.5 runtime
 uv sync --extra v25
 ```
 
-For every local interface in one environment:
-
-```bash
-uv sync --extra v25 --extra qwen --extra api --extra webui
-```
-
-### 2. Download and convert IndexTTS 2.5
+### Download and convert IndexTTS 2.5
 
 ```bash
 uv run hf download IndexTeam/IndexTTS-2.5 \
@@ -91,256 +77,160 @@ uv run mlx-indextts convert \
   --source-revision d0aa86e75bb6f3437f3831e95056fa72842d89ef
 ```
 
-The converter validates tensor coverage, stages output resumably, and publishes the converted model atomically. See the [full 2.5 conversion guide](docs/indextts-2.5.md#download-and-convert) for fp16/fp32 and other quantization levels.
-
-### 3. Clone a voice
-
-Use a clean speech reference, ideally with one speaker and little background noise.
+### Generate
 
 ```bash
 uv run mlx-indextts generate \
   --profile v25 \
   --language en \
   --ref-audio reference.wav \
-  --text "Hello from a fully local IndexTTS voice running on Apple Silicon." \
-  --output output.wav
+  --text "Hello from a local MLX voice." \
+  --output outputs/apple.wav
 ```
 
-The default v2.5 model path is `models/mlx-IndexTTS-2.5-8bit`. Override it with `--model` or `MLX_INDEXTTS_V25_MODEL`.
+See [the complete IndexTTS 2.5 MLX guide](docs/indextts-2.5.md).
 
-### 4. Add expression
+## NVIDIA quick start
 
-Named and mixed emotions work without loading Qwen:
+The CUDA stack lives in an isolated uv project so official PyTorch 2.8/CUDA 12.8 requirements cannot conflict with the newer Torch tooling used by MLX conversion and validation.
+
+### Install and validate CUDA
 
 ```bash
-uv run mlx-indextts generate \
-  --profile v25 \
+./scripts/setup_nvidia.sh
+
+# Optional acceleration dependencies:
+./scripts/setup_nvidia.sh --extra accel
+./scripts/setup_nvidia.sh --extra deepspeed
+```
+
+### Download IndexTTS 2.5
+
+```bash
+uv run --project nvidia mlx-indextts-nvidia download --version 2.5
+```
+
+### Generate on one RTX GPU
+
+```bash
+uv run --project nvidia mlx-indextts-nvidia generate \
+  --version 2.5 \
+  --model-dir checkpoints \
+  --device cuda:0 \
+  --precision bf16 \
+  --ref-audio reference.wav \
   --language en \
-  --ref-audio reference.wav \
-  --text "I cannot believe we finally made it." \
-  --emotion "happy:0.75,calm:0.25" \
-  --emo-alpha 0.65 \
-  --output expressive.wav
+  --text "Hello from IndexTTS on NVIDIA CUDA." \
+  --output outputs/nvidia.wav
 ```
 
-Or let the local Qwen emotion model interpret an independent direction:
+### Saturate three RTX 3090s for batch throughput
 
 ```bash
-uv sync --extra qwen
-uv run python scripts/convert_qwen_emotion_mlx.py
-
-uv run mlx-indextts generate \
-  --profile v25 \
-  --language en \
-  --ref-audio reference.wav \
-  --text "You came back." \
-  --emotion-text "Relieved and warm, with restrained excitement." \
-  --output directed.wav
+uv run --project nvidia mlx-indextts-nvidia batch \
+  --model-dir checkpoints \
+  --devices cuda:0,cuda:1,cuda:2 \
+  --precision bf16 \
+  --input jobs.jsonl \
+  --output-dir outputs/three_gpu
 ```
 
-## Faster repeated inference
+Each GPU gets one long-lived process and one model load; jobs are distributed round-robin. See the [full NVIDIA guide](docs/nvidia.md) for JSONL/CSV schemas, API serving, performance switches, and troubleshooting.
 
-Pre-compute speaker conditioning once, then reuse it without reprocessing the source audio:
+## Interfaces
+
+### MLX CLI
 
 ```bash
-uv run mlx-indextts speaker \
-  --profile v25 \
-  --ref-audio reference.wav \
-  --output speakers/my_voice_v25.npz
-
-uv run mlx-indextts generate \
-  --profile v25 \
-  --language es \
-  --ref-audio speakers/my_voice_v25.npz \
-  --text "Hola, esta voz ya está preparada para inferencia repetida." \
-  --output output_es.wav
+uv run mlx-indextts --help
 ```
 
-> [!IMPORTANT]
-> IndexTTS 2.0 and 2.5 speaker caches are intentionally incompatible. The 2.5 cache stores its schema, source revision, preprocessing metadata, tensor shapes, and reference-audio hash.
+Commands include conversion, generation, speaker-cache creation, batch planning, batch synthesis, video/emotion reference libraries, and denoising.
 
-## Choose your interface
+### NVIDIA CLI
 
-| Interface | Start here | Best for |
-| --- | --- | --- |
-| **CLI** | `uv run mlx-indextts generate --help` | Scripts, experiments, and one-off generation |
-| **Python** | `from mlx_indextts import IndexTTSv25` | Applications and custom pipelines |
-| **Batch** | `uv run mlx-indextts batch ...` | Books, dialogue, datasets, and subtitle rows |
-| **FastAPI** | `uv run mlx-indextts-api` | Local services and app integrations |
-| **Gradio** | `uv run mlx-indextts-webui` | Interactive testing and creative iteration |
-| **Streaming** | `POST /generate/stream` or `--stream` | Progressive completed-segment delivery |
+```bash
+uv run --project nvidia mlx-indextts-nvidia --help
+uv run --project nvidia mlx-indextts-nvidia doctor
+```
 
-### Python API
+Commands:
+
+- `doctor`: verify the CUDA PyTorch build, visible GPUs, VRAM, BF16, and official runtime.
+- `download`: download IndexTTS 2.5 or 2.0 checkpoints.
+- `generate`: model-resident single-GPU synthesis.
+- `batch`: one persistent model worker per selected GPU.
+- `serve`: local FastAPI service.
+
+### Python API — Apple MLX
 
 ```python
 from mlx_indextts import IndexTTSv25
 
-model = IndexTTSv25("models/mlx-IndexTTS-2.5-8bit")
-model.generate(
+tts = IndexTTSv25("models/mlx-IndexTTS-2.5-8bit")
+tts.generate(
     text="Hola, esta es una prueba.",
-    reference_audio="speakers/my_voice_v25.npz",
-    output_path="output_es.wav",
+    reference_audio="reference.wav",
+    output_path="outputs/es.wav",
     language="es",
-    emotion="calm",
 )
 ```
 
-### Batch generation
+### Python API — NVIDIA CUDA
 
-Input may be a text file with one utterance per line or a CSV containing a `text` column. CSV rows can also override language, speaker/emotion references, token budgets, and duration controls.
+```python
+from mlx_indextts import NvidiaGenerateRequest, NvidiaIndexTTS, NvidiaRuntimeConfig
 
-```bash
-uv run mlx-indextts batch \
-  --input dialogue.csv \
-  --ref-audio speakers/my_voice_v25.npz \
-  --output-dir outputs/dialogue \
-  --profile v25 \
-  --auto-emotion \
-  --combine
+runtime = NvidiaIndexTTS(
+    NvidiaRuntimeConfig(
+        model_dir="checkpoints",
+        version="2.5",
+        device="cuda:0",
+        precision="bf16",
+    )
+)
+
+result = runtime.generate(
+    NvidiaGenerateRequest(
+        text="Hola, esta es una prueba.",
+        ref_audio="reference.wav",
+        output_path="outputs/es_cuda.wav",
+        language="es",
+    )
+)
+print(result.as_dict())
 ```
-
-Each run writes individual WAV files and `manifest.csv`; `--combine` also produces `combined.wav`. The model stays resident across the batch.
-
-### Local API
-
-```bash
-uv sync --extra api
-uv run mlx-indextts-api
-```
-
-Core endpoints:
-
-- `GET /health`
-- `GET /profiles`
-- `POST /generate`
-- `POST /generate/stream`
-- `POST /speaker`
-- `POST /batch`
-- `POST /plan`
-- `GET /audio`
-
-```bash
-curl -X POST http://127.0.0.1:7862/generate \
-  -H 'content-type: application/json' \
-  -d '{
-    "text": "Hola, esta es una prueba.",
-    "ref_audio": "speakers/my_voice_v25.npz",
-    "profile": "v25",
-    "language": "es",
-    "output_path": "outputs/api_es.wav"
-  }'
-```
-
-### WebUI
-
-```bash
-uv sync --extra webui
-uv run mlx-indextts-webui
-```
-
-The Gradio UI exposes profile/language selection, pronunciation guidance, emotion modes, normalization and duration controls, and completed-segment progress through the same cached runtime.
 
 ## Model profiles
 
-| Profile | Languages | Highlights |
-| --- | --- | --- |
-| **IndexTTS 2.5** (`v25`) | Chinese, English, Japanese, Spanish, Arabic | Primary path; multilingual transfer, pronunciation annotations, independent emotion text, streaming, revision-safe caches |
-| **IndexTTS 2.0 standard** (`standard`) | Chinese and English | Preserved compatibility path with the shared emotion controls |
-| **IndexTTS 2.0 Vietnamese** (`vietnamese`) | Vietnamese | Local extension with automatic Vietnamese routing when tone marks are detected |
+| Profile | Backend | Languages | Notes |
+| --- | --- | --- | --- |
+| IndexTTS 2.5 | MLX + CUDA | `zh`, `en`, `ja`, `es`, `ar` | Primary multilingual target |
+| IndexTTS 2.0 standard | MLX + CUDA | Chinese, English | Preserved compatibility path |
+| IndexTTS 2.0 Vietnamese | MLX | Vietnamese | Local repository extension |
 
-Default local paths:
+## Performance posture
 
-```text
-models/mlx-IndexTTS-2.5-8bit
-models/mlx-indexTTS2-standard-8bit
-models/mlx-indexTTS2-vietnamese-8bit
-```
+For Apple Silicon, persistent 8-bit GPT is the default local balance; codec, S2Mel/DiT, and BigVGAN retain the selected conversion dtype.
 
-Override them with:
-
-```bash
-export MLX_INDEXTTS_V25_MODEL=/path/to/mlx-v25
-export MLX_INDEXTTS_STANDARD_MODEL=/path/to/mlx-v20
-export MLX_INDEXTTS_VIETNAMESE_MODEL=/path/to/mlx-vietnamese
-```
-
-## Quantization
-
-Persistent conversion supports fp32, fp16, and 3/4/5/6/8-bit GPT weights. The codec, S2Mel/DiT, and BigVGAN components retain the selected conversion dtype; quantization is not misrepresented as an all-component conversion.
-
-**8-bit is the recommended starting point** for a strong balance of footprint, quality, and speed. Reproduce and compare variants with the [quantized-model guide](docs/quantized-models.md).
-
-## Simplified data flow
-
-```mermaid
-flowchart LR
-    A[Reference voice] --> B[Speaker conditioning]
-    C[Text + language] --> D[MLX semantic GPT]
-    E[Emotion audio / vector / Qwen] --> F[Expressive acoustic generation]
-    B --> D
-    D --> F
-    F --> G[MLX BigVGAN]
-    G --> H[WAV / batch / API / stream]
-```
-
-## Advanced workflows
-
-| Workflow | Command | Output |
-| --- | --- | --- |
-| Emotion reference library | `mlx-indextts emotion2vec` | Tagged clips, catalog, emotion lookup JSON, summary |
-| Video/YouTube scene library | `mlx-indextts video-library` | Speech clips tagged by scene, emotion, gender, and age band |
-| Dialogue planner | `mlx-indextts plan` | Batch CSV with speaker and emotion references filled in |
-| Subtitle alignment | `target_duration` + `fit_duration` | Natural generation plus explicit pitch-preserving time fitting |
-| Reference cleanup | Default denoising or `--no-denoise-ref` | Cleaner speaker conditioning for noisy sources |
-
-Install the relevant optional groups only when needed:
-
-```bash
-uv sync --extra emotion2vec
-uv sync --extra library
-uv sync --extra denoise
-```
-
-## Performance
-
-Matched local validation on an M3 Max used the same references and texts, persistent 8-bit GPT models, 16 diffusion steps, and version-specific speaker caches. **RTF is real-time factor; lower is faster.**
-
-| Metric | IndexTTS 2.0 | IndexTTS 2.5 |
-| --- | ---: | ---: |
-| Cold model load | 1.484 s | 0.226 s |
-| Raw reference preprocessing | 10.837 s | 4.293 s |
-| Warm Chinese RTF | 1.388 | 1.043 |
-| Warm English RTF | 1.840 | 1.074 |
-| Mean warm RTF | 1.614 | 1.059 |
-
-These are environment- and sample-specific engineering measurements, not universal speed claims. See the [executed validation record](docs/indextts-2.5-validation.md) and [performance bottleneck analysis](docs/performance-bottlenecks.md) for methodology and caveats.
+For RTX 3090-class CUDA systems, start with BF16 on IndexTTS 2.5 and FP16 on IndexTTS 2.0. Benchmark `--cuda-kernel`, `--torch-compile`, `--accel`, and `--deepspeed` independently. For multiple 24 GiB cards, job-level parallelism generally provides more useful throughput than tensor parallelism because one model already fits on one GPU.
 
 ## Documentation
 
-- **[IndexTTS 2.5 guide](docs/indextts-2.5.md)** — source revision, conversion, generation, pronunciation, emotion, duration, API, and validation.
-- **[Validation record](docs/indextts-2.5-validation.md)** — executed parity and quality checks.
-- **[Quantized models](docs/quantized-models.md)** — persistent quantization and benchmark reproduction.
-- **[Performance bottlenecks](docs/performance-bottlenecks.md)** — profiling findings and optimized hot paths.
-
-Useful discovery commands:
-
-```bash
-uv run mlx-indextts --help
-uv run mlx-indextts generate --help
-uv run mlx-indextts batch --help
-```
+- [NVIDIA CUDA setup, API, and multi-GPU guide](docs/nvidia.md)
+- [IndexTTS 2.5 MLX conversion and generation](docs/indextts-2.5.md)
+- [Executed MLX validation record](docs/indextts-2.5-validation.md)
+- [Persistent quantized model guide](docs/quantized-models.md)
+- [Performance bottleneck analysis](docs/performance-bottlenecks.md)
 
 ## License and responsible use
 
-Repository code is released under the [MIT License](LICENSE).
+Repository code uses the license in this repository. Official IndexTTS weights, source, and converted derivatives remain governed by their upstream model/source licenses, including commercial thresholds, downstream notices, and use restrictions.
 
-Official IndexTTS weights and converted/quantized derivatives are governed by the upstream **bilibili Model Use License Agreement**, including its commercial thresholds, downstream notice obligations, and use restrictions. Keep the upstream model license with every model copy.
-
-Only clone voices you own or have explicit permission to use. Do not use this software for impersonation, deception, privacy infringement, unlawful content, or prohibited high-risk deployment. The model does not verify identity or consent for you.
+Only clone voices you own or have explicit permission to use. Do not use the software for impersonation, deception, privacy infringement, fraud, unlawful content, or prohibited high-risk deployment.
 
 ## Acknowledgments
 
-- [IndexTTS](https://github.com/index-tts/index-tts) — original PyTorch implementation and model family.
-- [MLX](https://github.com/ml-explore/mlx) — Apple's array framework for Apple Silicon.
-
-Contributions, reproducible benchmark results, and focused bug reports are welcome.
+- [IndexTTS](https://github.com/index-tts/index-tts) — official model and NVIDIA PyTorch runtime
+- [MLX](https://github.com/ml-explore/mlx) — Apple machine-learning framework
+- [PyTorch](https://pytorch.org/) — CUDA execution platform
