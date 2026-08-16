@@ -1,33 +1,47 @@
 """Pytest configuration and fixtures."""
 
 import pytest
-import mlx.core as mx
 import numpy as np
+
+try:
+    import mlx.core as mx
+except ImportError:
+    mx = None
+
+
+def require_mlx():
+    if mx is None:
+        pytest.skip("MLX is only available on Apple Silicon")
+    return mx
 
 
 @pytest.fixture
 def sample_audio():
     """Generate sample audio data."""
+    mlx = require_mlx()
     # 1 second of audio at 24kHz
-    return mx.array(np.random.randn(24000).astype(np.float32))
+    return mlx.array(np.random.randn(24000).astype(np.float32))
 
 
 @pytest.fixture
 def sample_mel():
     """Generate sample mel spectrogram."""
+    mlx = require_mlx()
     # (batch, n_mels, time)
-    return mx.array(np.random.randn(1, 100, 200).astype(np.float32))
+    return mlx.array(np.random.randn(1, 100, 200).astype(np.float32))
 
 
 @pytest.fixture
 def sample_text_tokens():
     """Generate sample text tokens."""
-    return mx.array([[100, 200, 300, 400, 500]], dtype=mx.int32)
+    mlx = require_mlx()
+    return mlx.array([[100, 200, 300, 400, 500]], dtype=mlx.int32)
 
 
 @pytest.fixture
 def small_config():
     """Create a small config for testing."""
+    require_mlx()
     from mlx_indextts.config import IndexTTSConfig, GPTConfig, ConformerConfig
 
     config = IndexTTSConfig()

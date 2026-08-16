@@ -18,6 +18,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+import yaml
+
+from .model_version import ModelFormatError, normalize_v25_config
+
 UPSTREAM_REPOSITORY = "https://github.com/index-tts/index-tts"
 UPSTREAM_REVISION = "4f8792ff120cd3ea470dd511e997a17c86cddd10"
 MODEL_REPOSITORIES = {
@@ -115,6 +119,26 @@ def normalize_language(value: str | None, text: str = "") -> str:
         raise ValueError(
             f"Unsupported language {value!r}; choose auto, zh, en, ja, es, or ar"
         ) from exc
+
+
+def normalize_v25_runtime_config(model_dir: Path, config_path: Path) -> Path:
+    """Write a local config for public v2.5 artifacts with stale paths."""
+    try:
+        raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict) or int(raw.get("gpt", {}).get("number_text_tokens", 0)) != 60509:
+            return config_path
+        normalized = normalize_v25_config(raw)
+        # The MLX converter uses this metadata, but the pinned official CUDA
+        # EnhancedCodec constructor rejects unknown keyword arguments.
+        normalized["semantic_codec"].pop("frame_rate", None)
+    except (OSError, TypeError, ValueError, yaml.YAMLError, ModelFormatError):
+        return config_path
+
+    target = model_dir / "config.nvidia-v25.yaml"
+    serialized = yaml.safe_dump(normalized, allow_unicode=True, sort_keys=False)
+    if not target.is_file() or target.read_text(encoding="utf-8") != serialized:
+        target.write_text(serialized, encoding="utf-8")
+    return target
 
 
 def _coerce_emotion_values(values: Sequence[Any]) -> list[float]:
@@ -425,6 +449,8 @@ class NvidiaIndexTTS:
             raise FileNotFoundError(f"Model directory does not exist: {self.model_dir}")
         if not self.config_path.is_file():
             raise FileNotFoundError(f"Model config does not exist: {self.config_path}")
+        if self.version == "2.5":
+            self.config_path = normalize_v25_runtime_config(self.model_dir, self.config_path)
         _validate_optional_accelerators(config)
         runtime_class = upstream_class or _load_upstream_class(self.version)
         kwargs: dict[str, Any] = {

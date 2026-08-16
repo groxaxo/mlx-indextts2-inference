@@ -64,6 +64,9 @@ index-tts/index-tts@4f8792ff120cd3ea470dd511e997a17c86cddd10
 # IndexTTS 2.5 -> ./checkpoints
 uv run --project nvidia mlx-indextts-nvidia download --version 2.5
 
+# The public IndexTTS 2.5 config contains stale internal checkpoint paths.
+# The NVIDIA runtime normalizes them to the local downloaded artifacts.
+
 # IndexTTS 2.0 -> ./checkpoints_2
 uv run --project nvidia mlx-indextts-nvidia download --version 2.0
 ```

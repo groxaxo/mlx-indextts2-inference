@@ -37,6 +37,7 @@ Thumbs.db
 
 # Project specific
 /models/
+/checkpoints/
 ref_audios/
 *.log
 *.safetensors

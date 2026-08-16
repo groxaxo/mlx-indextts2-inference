@@ -9,11 +9,39 @@ from mlx_indextts.nvidia_runtime import (
     NvidiaRuntimeConfig,
     detect_language,
     normalize_language,
+    normalize_v25_runtime_config,
     normalize_version,
     parse_emotion_vector,
     resolve_device,
     resolve_precision,
 )
+
+
+def test_runtime_normalizes_public_v25_checkpoint_paths(tmp_path):
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        """
+version: 2.0
+dataset: {bpe_model: bpe.model}
+gpt: {number_text_tokens: 60509}
+semantic_codec: {codebook_size: 8192}
+gpt_checkpoint: /cubefs/internal/checkpoint/checkpoint_5000.pth
+s2mel_checkpoint: /cubefs/internal/checkpoint/DiT_gptlatent_10000.pth
+w2v_stat: /cubefs/internal/checkpoint/wav2vec2bert_stats.pt
+emo_matrix: /cubefs/internal/checkpoint/feat2.pt
+spk_matrix: /cubefs/internal/checkpoint/feat1.pt
+vocoder: {name: /cubefs/internal/checkpoint/bigvgan_generator.pt}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    normalized = normalize_v25_runtime_config(tmp_path, config)
+
+    assert normalized.name == "config.nvidia-v25.yaml"
+    contents = normalized.read_text(encoding="utf-8")
+    assert "gpt_checkpoint: gpt.pth" in contents
+    assert "s2mel_checkpoint: s2mel.pth" in contents
+    assert "frame_rate" not in contents
 
 
 class FakeCuda:

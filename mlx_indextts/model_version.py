@@ -77,11 +77,6 @@ def _load_yaml_config(model_dir: Path) -> dict[str, Any]:
     return data
 
 
-def _checkpoint_name(value: Any, default: str) -> str:
-    text = str(value or default).strip()
-    return Path(text).name or default
-
-
 def normalize_v25_config(raw_config: dict[str, Any]) -> dict[str, Any]:
     """Return a converted-model config normalized for the public 2.5 artifacts.
 
@@ -110,15 +105,13 @@ def normalize_v25_config(raw_config: dict[str, Any]) -> dict[str, Any]:
             f"{V25_TEXT_VOCAB_SIZE}, got {vocab_size}"
         )
 
-    config["gpt_checkpoint"] = _checkpoint_name(config.get("gpt_checkpoint"), "gpt.pth")
-    config["s2mel_checkpoint"] = _checkpoint_name(
-        config.get("s2mel_checkpoint"), "s2mel.pth"
-    )
-    config["w2v_stat"] = _checkpoint_name(
-        config.get("w2v_stat"), "wav2vec2bert_stats.pt"
-    )
-    config["emo_matrix"] = _checkpoint_name(config.get("emo_matrix"), "feat2.pt")
-    config["spk_matrix"] = _checkpoint_name(config.get("spk_matrix"), "feat1.pt")
+    # Public v2.5 releases contain stale internal paths. These are the
+    # authoritative filenames in the downloaded Hugging Face artifact.
+    config["gpt_checkpoint"] = "gpt.pth"
+    config["s2mel_checkpoint"] = "s2mel.pth"
+    config["w2v_stat"] = "wav2vec2bert_stats.pt"
+    config["emo_matrix"] = "feat2.pt"
+    config["spk_matrix"] = "feat1.pt"
 
     semantic_codec = config.setdefault("semantic_codec", {})
     if not isinstance(semantic_codec, dict):
@@ -128,7 +121,7 @@ def normalize_v25_config(raw_config: dict[str, Any]) -> dict[str, Any]:
     vocoder = config.setdefault("vocoder", {})
     if not isinstance(vocoder, dict):
         raise ModelFormatError("IndexTTS 2.5 vocoder config must be a mapping")
-    vocoder["name"] = _checkpoint_name(vocoder.get("name"), "bigvgan_generator.pt")
+    vocoder["name"] = "bigvgan_generator.pt"
     return config
 
 
