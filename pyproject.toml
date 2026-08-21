@@ -117,6 +117,7 @@ mlx-indextts = "mlx_indextts.cli:main"
 mlx-indextts-api = "mlx_indextts.api_server:main"
 mlx-indextts-webui = "mlx_indextts.webui:main"
 mlx-indextts-nvidia = "mlx_indextts.nvidia_cli:main"
+mlx-indextts-director = "mlx_indextts.director_cli:main"
 
 [project.urls]
 Homepage = "https://github.com/groxaxo/mlx-indextts2-inference"

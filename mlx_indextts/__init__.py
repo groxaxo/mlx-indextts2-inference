@@ -8,6 +8,11 @@ __all__ = [
     "NvidiaIndexTTS",
     "NvidiaRuntimeConfig",
     "NvidiaGenerateRequest",
+    "DirectionPlan",
+    "IndexTTSDirector",
+    "OpenAICompatibleDirector",
+    "DirectedSynthesisResult",
+    "synthesize_direction_plan",
 ]
 
 
@@ -41,5 +46,27 @@ def __getattr__(name: str):
             "NvidiaIndexTTS": NvidiaIndexTTS,
             "NvidiaRuntimeConfig": NvidiaRuntimeConfig,
             "NvidiaGenerateRequest": NvidiaGenerateRequest,
+        }[name]
+    if name in {"DirectionPlan", "IndexTTSDirector", "OpenAICompatibleDirector"}:
+        from mlx_indextts.director import (
+            DirectionPlan,
+            IndexTTSDirector,
+            OpenAICompatibleDirector,
+        )
+
+        return {
+            "DirectionPlan": DirectionPlan,
+            "IndexTTSDirector": IndexTTSDirector,
+            "OpenAICompatibleDirector": OpenAICompatibleDirector,
+        }[name]
+    if name in {"DirectedSynthesisResult", "synthesize_direction_plan"}:
+        from mlx_indextts.directed_runtime import (
+            DirectedSynthesisResult,
+            synthesize_direction_plan,
+        )
+
+        return {
+            "DirectedSynthesisResult": DirectedSynthesisResult,
+            "synthesize_direction_plan": synthesize_direction_plan,
         }[name]
     raise AttributeError(name)
