@@ -20,6 +20,10 @@ The converter atomically publishes only after strict component mapping and
 load checks. Its `model_manifest.json` records source revision, converter
 revision, GPT quantization, component coverage, and every artifact size.
 
+For resident-generation latency on an Apple M5 MacBook Air, including the
+reproducible privacy-preserving runner, see the
+[warm MLX benchmark](indextts-2.5-warm-benchmarks.md).
+
 ## Intelligibility check
 
 Run a controlled prompt through a local Parakeet OpenAI-compatible endpoint:
